@@ -513,6 +513,16 @@ void Layer::setPerFrameData(const sp<const DisplayDevice>& hw,
     Region visible = tr.transform(visibleRegion.intersect(hw->getViewport()));
     layer.setVisibleRegionScreen(visible);
 
+    // Pass full-surface damage down untouched
+    if (surfaceDamageRegion.isRect() &&
+            surfaceDamageRegion.getBounds() == Rect::INVALID_RECT) {
+        layer.setSurfaceDamage(surfaceDamageRegion);
+    } else {
+        Region surfaceDamage =
+            tr.transform(surfaceDamageRegion.intersect(hw->getViewport()));
+        layer.setSurfaceDamage(surfaceDamage);
+    }
+
     if (mSidebandStream.get()) {
         layer.setSidebandStream(mSidebandStream);
     } else {
@@ -764,7 +774,6 @@ bool Layer::getOpacityForFormat(uint32_t format) {
     switch (format) {
         case HAL_PIXEL_FORMAT_RGBA_8888:
         case HAL_PIXEL_FORMAT_BGRA_8888:
-        case HAL_PIXEL_FORMAT_sRGB_A_8888:
             return false;
     }
     // in all other case, we have no blending (also for unknown formats)
@@ -909,7 +918,7 @@ uint32_t Layer::doTransaction(uint32_t flags) {
         const bool resizePending = (c.requested.w != c.active.w) ||
                                    (c.requested.h != c.active.h);
 
-        if (resizePending) {
+        if (resizePending && mSidebandStream == NULL) {
             // don't let Layer::doTransaction update the drawing state
             // if we have a pending resize, unless we are in fixed-size mode.
             // the drawing state will be updated only once we receive a buffer
@@ -918,6 +927,10 @@ uint32_t Layer::doTransaction(uint32_t flags) {
             // in particular, we want to make sure the clip (which is part
             // of the geometry state) is latched together with the size but is
             // latched immediately when no resizing is involved.
+            //
+            // If a sideband stream is attached, however, we want to skip this
+            // optimization so that transactions aren't missed when a buffer
+            // never arrives
 
             flags |= eDontUpdateGeometryState;
         }
@@ -1035,6 +1048,18 @@ bool Layer::setLayerStack(uint32_t layerStack) {
     return true;
 }
 
+void Layer::useSurfaceDamage() {
+    if (mFlinger->mForceFullDamage) {
+        surfaceDamageRegion = Region::INVALID_REGION;
+    } else {
+        surfaceDamageRegion = mSurfaceFlingerConsumer->getSurfaceDamage();
+    }
+}
+
+void Layer::useEmptyDamage() {
+    surfaceDamageRegion.clear();
+}
+
 // ----------------------------------------------------------------------------
 // pageflip handling...
 // ----------------------------------------------------------------------------
@@ -1131,7 +1156,7 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions)
             }
 
             virtual bool reject(const sp<GraphicBuffer>& buf,
-                    const IGraphicBufferConsumer::BufferItem& item) {
+                    const BufferItem& item) {
                 if (buf == NULL) {
                     return false;
                 }
@@ -1350,6 +1375,7 @@ void Layer::dump(String8& result, Colorizer& colorizer) const
 
     s.activeTransparentRegion.dump(result, "transparentRegion");
     visibleRegion.dump(result, "visibleRegion");
+    surfaceDamageRegion.dump(result, "surfaceDamageRegion");
     sp<Client> client(mClientRef.promote());
 
     result.appendFormat(            "      "

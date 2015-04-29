@@ -53,6 +53,8 @@ enum {
     direction_RTL
 };
 
+const Region Region::INVALID_REGION(Rect::INVALID_RECT);
+
 // ----------------------------------------------------------------------------
 
 Region::Region() {
@@ -130,43 +132,42 @@ static void reverseRectsResolvingJunctions(const Rect* begin, const Rect* end,
             // prevIndex can't be -1 here because if endLastSpan is set to a
             // value greater than -1 (allowing the loop to execute),
             // beginLastSpan (and therefore prevIndex) will also be increased
-            const Rect* prev = &dst[static_cast<size_t>(prevIndex)];
-
+            const Rect prev = dst[static_cast<size_t>(prevIndex)];
             if (spanDirection == direction_RTL) {
                 // iterating over previous span RTL, quit if it's too far left
-                if (prev->right <= left) break;
+                if (prev.right <= left) break;
 
-                if (prev->right > left && prev->right < right) {
-                    dst.add(Rect(prev->right, top, right, bottom));
-                    right = prev->right;
+                if (prev.right > left && prev.right < right) {
+                    dst.add(Rect(prev.right, top, right, bottom));
+                    right = prev.right;
                 }
 
-                if (prev->left > left && prev->left < right) {
-                    dst.add(Rect(prev->left, top, right, bottom));
-                    right = prev->left;
+                if (prev.left > left && prev.left < right) {
+                    dst.add(Rect(prev.left, top, right, bottom));
+                    right = prev.left;
                 }
 
                 // if an entry in the previous span is too far right, nothing further left in the
                 // current span will need it
-                if (prev->left >= right) {
+                if (prev.left >= right) {
                     beginLastSpan = prevIndex;
                 }
             } else {
                 // iterating over previous span LTR, quit if it's too far right
-                if (prev->left >= right) break;
+                if (prev.left >= right) break;
 
-                if (prev->left > left && prev->left < right) {
-                    dst.add(Rect(left, top, prev->left, bottom));
-                    left = prev->left;
+                if (prev.left > left && prev.left < right) {
+                    dst.add(Rect(left, top, prev.left, bottom));
+                    left = prev.left;
                 }
 
-                if (prev->right > left && prev->right < right) {
-                    dst.add(Rect(left, top, prev->right, bottom));
-                    left = prev->right;
+                if (prev.right > left && prev.right < right) {
+                    dst.add(Rect(left, top, prev.right, bottom));
+                    left = prev.right;
                 }
                 // if an entry in the previous span is too far left, nothing further right in the
                 // current span will need it
-                if (prev->right <= left) {
+                if (prev.right <= left) {
                     beginLastSpan = prevIndex;
                 }
             }
@@ -518,8 +519,12 @@ bool Region::validate(const Region& reg, const char* name, bool silent)
     Rect b(*prev);
     while (cur != tail) {
         if (cur->isValid() == false) {
-            ALOGE_IF(!silent, "%s: region contains an invalid Rect", name);
-            result = false;
+            // We allow this particular flavor of invalid Rect, since it is used
+            // as a signal value in various parts of the system
+            if (*cur != Rect::INVALID_RECT) {
+                ALOGE_IF(!silent, "%s: region contains an invalid Rect", name);
+                result = false;
+            }
         }
         if (cur->right > region_operator<Rect>::max_value) {
             ALOGE_IF(!silent, "%s: rect->right > max_value", name);
@@ -691,7 +696,9 @@ void Region::boolean_operation(int op, Region& dst,
         const Region& lhs,
         const Rect& rhs, int dx, int dy)
 {
-    if (!rhs.isValid()) {
+    // We allow this particular flavor of invalid Rect, since it is used as a
+    // signal value in various parts of the system
+    if (!rhs.isValid() && rhs != Rect::INVALID_RECT) {
         ALOGE("Region::boolean_operation(op=%d) invalid Rect={%d,%d,%d,%d}",
                 op, rhs.left, rhs.top, rhs.right, rhs.bottom);
         return;
@@ -754,35 +761,52 @@ void Region::translate(Region& dst, const Region& reg, int dx, int dy)
 // ----------------------------------------------------------------------------
 
 size_t Region::getFlattenedSize() const {
-    return mStorage.size() * sizeof(Rect);
+    return sizeof(uint32_t) + mStorage.size() * sizeof(Rect);
 }
 
 status_t Region::flatten(void* buffer, size_t size) const {
 #if VALIDATE_REGIONS
     validate(*this, "Region::flatten");
 #endif
-    if (size < mStorage.size() * sizeof(Rect)) {
+    if (size < getFlattenedSize()) {
         return NO_MEMORY;
     }
-    Rect* rects = reinterpret_cast<Rect*>(buffer);
-    memcpy(rects, mStorage.array(), mStorage.size() * sizeof(Rect));
+    // Cast to uint32_t since the size of a size_t can vary between 32- and
+    // 64-bit processes
+    FlattenableUtils::write(buffer, size, static_cast<uint32_t>(mStorage.size()));
+    for (auto rect : mStorage) {
+        status_t result = rect.flatten(buffer, size);
+        if (result != NO_ERROR) {
+            return result;
+        }
+        FlattenableUtils::advance(buffer, size, sizeof(rect));
+    }
     return NO_ERROR;
 }
 
 status_t Region::unflatten(void const* buffer, size_t size) {
-    Region result;
-    if (size >= sizeof(Rect)) {
-        Rect const* rects = reinterpret_cast<Rect const*>(buffer);
-        size_t count = size / sizeof(Rect);
-        if (count > 0) {
-            result.mStorage.clear();
-            ssize_t err = result.mStorage.insertAt(0, count);
-            if (err < 0) {
-                return status_t(err);
-            }
-            memcpy(result.mStorage.editArray(), rects, count*sizeof(Rect));
-        }
+    if (size < sizeof(uint32_t)) {
+        return NO_MEMORY;
     }
+
+    uint32_t numRects = 0;
+    FlattenableUtils::read(buffer, size, numRects);
+    if (size < numRects * sizeof(Rect)) {
+        return NO_MEMORY;
+    }
+
+    Region result;
+    result.mStorage.clear();
+    for (size_t r = 0; r < numRects; ++r) {
+        Rect rect;
+        status_t status = rect.unflatten(buffer, size);
+        if (status != NO_ERROR) {
+            return status;
+        }
+        FlattenableUtils::advance(buffer, size, sizeof(rect));
+        result.mStorage.push_back(rect);
+    }
+
 #if VALIDATE_REGIONS
     validate(result, "Region::unflatten");
 #endif

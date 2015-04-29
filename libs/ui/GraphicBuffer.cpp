@@ -152,6 +152,16 @@ status_t GraphicBuffer::reallocate(uint32_t inWidth, uint32_t inHeight,
     return initSize(inWidth, inHeight, inFormat, inUsage);
 }
 
+bool GraphicBuffer::needsReallocation(uint32_t inWidth, uint32_t inHeight,
+        PixelFormat inFormat, uint32_t inUsage)
+{
+    if (static_cast<int>(inWidth) != width) return true;
+    if (static_cast<int>(inHeight) != height) return true;
+    if (inFormat != format) return true;
+    if ((static_cast<uint32_t>(usage) & inUsage) != inUsage) return true;
+    return false;
+}
+
 status_t GraphicBuffer::initSize(uint32_t inWidth, uint32_t inHeight,
         PixelFormat inFormat, uint32_t inUsage)
 {
@@ -303,7 +313,7 @@ status_t GraphicBuffer::flatten(void*& buffer, size_t& size, int*& fds, size_t& 
                 static_cast<size_t>(handle->numInts) * sizeof(int));
     }
 
-    buffer = reinterpret_cast<void*>(static_cast<int*>(buffer) + sizeNeeded);
+    buffer = static_cast<void*>(static_cast<uint8_t*>(buffer) + sizeNeeded);
     size -= sizeNeeded;
     if (handle) {
         fds += handle->numFds;
@@ -323,7 +333,11 @@ status_t GraphicBuffer::unflatten(
     const size_t numFds  = static_cast<size_t>(buf[8]);
     const size_t numInts = static_cast<size_t>(buf[9]);
 
-    const size_t maxNumber = UINT_MAX / sizeof(int);
+    // Limit the maxNumber to be relatively small. The number of fds or ints
+    // should not come close to this number, and the number itself was simply
+    // chosen to be high enough to not cause issues and low enough to prevent
+    // overflow problems.
+    const size_t maxNumber = 4096;
     if (numFds >= maxNumber || numInts >= (maxNumber - 10)) {
         width = height = stride = format = usage = 0;
         handle = NULL;
@@ -381,7 +395,7 @@ status_t GraphicBuffer::unflatten(
         }
     }
 
-    buffer = reinterpret_cast<void const*>(static_cast<int const*>(buffer) + sizeNeeded);
+    buffer = static_cast<void const*>(static_cast<uint8_t const*>(buffer) + sizeNeeded);
     size -= sizeNeeded;
     fds += numFds;
     count -= numFds;

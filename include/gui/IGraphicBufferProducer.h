@@ -28,6 +28,7 @@
 #include <ui/Fence.h>
 #include <ui/GraphicBuffer.h>
 #include <ui/Rect.h>
+#include <ui/Region.h>
 
 namespace android {
 // ----------------------------------------------------------------------------
@@ -134,9 +135,7 @@ public:
     // updateTexImage() is called.  If width and height are both zero, the
     // default values specified by setDefaultBufferSize() are used instead.
     //
-    // The pixel formats are enumerated in <graphics.h>, e.g.
-    // HAL_PIXEL_FORMAT_RGBA_8888.  If the format is 0, the default format
-    // will be used.
+    // If the format is 0, the default format will be used.
     //
     // The usage argument specifies gralloc buffer usage flags.  The values
     // are enumerated in <gralloc.h>, e.g. GRALLOC_USAGE_HW_RENDER.  These
@@ -167,7 +166,7 @@ public:
     // All other negative values are an unknown error returned downstream
     // from the graphics allocator (typically errno).
     virtual status_t dequeueBuffer(int* slot, sp<Fence>* fence, bool async,
-            uint32_t w, uint32_t h, uint32_t format, uint32_t usage) = 0;
+            uint32_t w, uint32_t h, PixelFormat format, uint32_t usage) = 0;
 
     // detachBuffer attempts to remove all ownership of the buffer in the given
     // slot from the buffer queue. If this call succeeds, the slot will be
@@ -267,6 +266,7 @@ public:
         inline QueueBufferInput(const Parcel& parcel);
         // timestamp - a monotonically increasing value in nanoseconds
         // isAutoTimestamp - if the timestamp was synthesized at queue time
+        // dataSpace - description of the contents, interpretation depends on format
         // crop - a crop rectangle that's used as a hint to the consumer
         // scalingMode - a set of flags from NATIVE_WINDOW_SCALING_* in <window.h>
         // transform - a set of flags from NATIVE_WINDOW_TRANSFORM_* in <window.h>
@@ -276,17 +276,21 @@ public:
         // sticky - the sticky transform set in Surface (only used by the LEGACY
         //          camera mode).
         inline QueueBufferInput(int64_t timestamp, bool isAutoTimestamp,
-                const Rect& crop, int scalingMode, uint32_t transform, bool async,
-                const sp<Fence>& fence, uint32_t sticky = 0)
-        : timestamp(timestamp), isAutoTimestamp(isAutoTimestamp), crop(crop),
-          scalingMode(scalingMode), transform(transform), stickyTransform(sticky),
-          async(async), fence(fence) { }
+                android_dataspace dataSpace, const Rect& crop, int scalingMode,
+                uint32_t transform, bool async, const sp<Fence>& fence,
+                uint32_t sticky = 0)
+                : timestamp(timestamp), isAutoTimestamp(isAutoTimestamp),
+                  dataSpace(dataSpace), crop(crop), scalingMode(scalingMode),
+                  transform(transform), stickyTransform(sticky),
+                  async(async), fence(fence), surfaceDamage() { }
         inline void deflate(int64_t* outTimestamp, bool* outIsAutoTimestamp,
-                Rect* outCrop, int* outScalingMode, uint32_t* outTransform,
-                bool* outAsync, sp<Fence>* outFence,
+                android_dataspace* outDataSpace,
+                Rect* outCrop, int* outScalingMode,
+                uint32_t* outTransform, bool* outAsync, sp<Fence>* outFence,
                 uint32_t* outStickyTransform = NULL) const {
             *outTimestamp = timestamp;
             *outIsAutoTimestamp = bool(isAutoTimestamp);
+            *outDataSpace = dataSpace;
             *outCrop = crop;
             *outScalingMode = scalingMode;
             *outTransform = transform;
@@ -303,15 +307,20 @@ public:
         status_t flatten(void*& buffer, size_t& size, int*& fds, size_t& count) const;
         status_t unflatten(void const*& buffer, size_t& size, int const*& fds, size_t& count);
 
+        const Region& getSurfaceDamage() const { return surfaceDamage; }
+        void setSurfaceDamage(const Region& damage) { surfaceDamage = damage; }
+
     private:
         int64_t timestamp;
         int isAutoTimestamp;
+        android_dataspace dataSpace;
         Rect crop;
         int scalingMode;
         uint32_t transform;
         uint32_t stickyTransform;
         int async;
         sp<Fence> fence;
+        Region surfaceDamage;
     };
 
     // QueueBufferOutput must be a POD structure
@@ -448,7 +457,19 @@ public:
     // dequeueBuffer. If there are already the maximum number of buffers
     // allocated, this function has no effect.
     virtual void allocateBuffers(bool async, uint32_t width, uint32_t height,
-            uint32_t format, uint32_t usage) = 0;
+            PixelFormat format, uint32_t usage) = 0;
+
+    // Sets whether dequeueBuffer is allowed to allocate new buffers.
+    //
+    // Normally dequeueBuffer does not discriminate between free slots which
+    // already have an allocated buffer and those which do not, and will
+    // allocate a new buffer if the slot doesn't have a buffer or if the slot's
+    // buffer doesn't match the requested size, format, or usage. This method
+    // allows the producer to restrict the eligible slots to those which already
+    // have an allocated buffer of the correct size, format, and usage. If no
+    // eligible slot is available, dequeueBuffer will block or return an error
+    // as usual.
+    virtual status_t allowAllocation(bool allow) = 0;
 };
 
 // ----------------------------------------------------------------------------

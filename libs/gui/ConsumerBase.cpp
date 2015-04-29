@@ -27,6 +27,7 @@
 
 #include <hardware/hardware.h>
 
+#include <gui/BufferItem.h>
 #include <gui/IGraphicBufferAlloc.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
@@ -40,9 +41,9 @@
 
 // Macros for including the ConsumerBase name in log messages
 #define CB_LOGV(x, ...) ALOGV("[%s] " x, mName.string(), ##__VA_ARGS__)
-#define CB_LOGD(x, ...) ALOGD("[%s] " x, mName.string(), ##__VA_ARGS__)
-#define CB_LOGI(x, ...) ALOGI("[%s] " x, mName.string(), ##__VA_ARGS__)
-#define CB_LOGW(x, ...) ALOGW("[%s] " x, mName.string(), ##__VA_ARGS__)
+//#define CB_LOGD(x, ...) ALOGD("[%s] " x, mName.string(), ##__VA_ARGS__)
+//#define CB_LOGI(x, ...) ALOGI("[%s] " x, mName.string(), ##__VA_ARGS__)
+//#define CB_LOGW(x, ...) ALOGW("[%s] " x, mName.string(), ##__VA_ARGS__)
 #define CB_LOGE(x, ...) ALOGE("[%s] " x, mName.string(), ##__VA_ARGS__)
 
 namespace android {
@@ -162,6 +163,21 @@ void ConsumerBase::setFrameAvailableListener(
     mFrameAvailableListener = listener;
 }
 
+status_t ConsumerBase::detachBuffer(int slot) {
+    CB_LOGV("detachBuffer");
+    Mutex::Autolock lock(mMutex);
+
+    status_t result = mConsumer->detachBuffer(slot);
+    if (result != NO_ERROR) {
+        CB_LOGE("Failed to detach buffer: %d", result);
+        return result;
+    }
+
+    freeBufferLocked(slot);
+
+    return result;
+}
+
 void ConsumerBase::dump(String8& result) const {
     dump(result, "");
 }
@@ -179,7 +195,7 @@ void ConsumerBase::dumpLocked(String8& result, const char* prefix) const {
     }
 }
 
-status_t ConsumerBase::acquireBufferLocked(BufferQueue::BufferItem *item,
+status_t ConsumerBase::acquireBufferLocked(BufferItem *item,
         nsecs_t presentWhen) {
     status_t err = mConsumer->acquireBuffer(item, presentWhen);
     if (err != NO_ERROR) {

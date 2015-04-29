@@ -8,6 +8,7 @@ test_src_files := \
     installd_utils_test.cpp
 
 shared_libraries := \
+    libbase \
     libutils \
     libcutils \
 
@@ -25,5 +26,6 @@ $(foreach file,$(test_src_files), \
     $(eval LOCAL_SRC_FILES := $(file)) \
     $(eval LOCAL_C_INCLUDES := $(c_includes)) \
     $(eval LOCAL_MODULE := $(notdir $(file:%.cpp=%))) \
+    $(eval LOCAL_CLANG := true) \
     $(eval include $(BUILD_NATIVE_TEST)) \
 )

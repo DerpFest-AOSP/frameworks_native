@@ -16,15 +16,16 @@
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "BufferItemConsumer"
-#define ATRACE_TAG ATRACE_TAG_GRAPHICS
+//#define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <utils/Log.h>
 
+#include <gui/BufferItem.h>
 #include <gui/BufferItemConsumer.h>
 
-#define BI_LOGV(x, ...) ALOGV("[%s] " x, mName.string(), ##__VA_ARGS__)
-#define BI_LOGD(x, ...) ALOGD("[%s] " x, mName.string(), ##__VA_ARGS__)
-#define BI_LOGI(x, ...) ALOGI("[%s] " x, mName.string(), ##__VA_ARGS__)
-#define BI_LOGW(x, ...) ALOGW("[%s] " x, mName.string(), ##__VA_ARGS__)
+//#define BI_LOGV(x, ...) ALOGV("[%s] " x, mName.string(), ##__VA_ARGS__)
+//#define BI_LOGD(x, ...) ALOGD("[%s] " x, mName.string(), ##__VA_ARGS__)
+//#define BI_LOGI(x, ...) ALOGI("[%s] " x, mName.string(), ##__VA_ARGS__)
+//#define BI_LOGW(x, ...) ALOGW("[%s] " x, mName.string(), ##__VA_ARGS__)
 #define BI_LOGE(x, ...) ALOGE("[%s] " x, mName.string(), ##__VA_ARGS__)
 
 namespace android {
@@ -44,8 +45,7 @@ BufferItemConsumer::BufferItemConsumer(
     }
 }
 
-BufferItemConsumer::~BufferItemConsumer() {
-}
+BufferItemConsumer::~BufferItemConsumer() {}
 
 void BufferItemConsumer::setName(const String8& name) {
     Mutex::Autolock _l(mMutex);
@@ -105,9 +105,15 @@ status_t BufferItemConsumer::setDefaultBufferSize(uint32_t w, uint32_t h) {
     return mConsumer->setDefaultBufferSize(w, h);
 }
 
-status_t BufferItemConsumer::setDefaultBufferFormat(uint32_t defaultFormat) {
+status_t BufferItemConsumer::setDefaultBufferFormat(PixelFormat defaultFormat) {
     Mutex::Autolock _l(mMutex);
     return mConsumer->setDefaultBufferFormat(defaultFormat);
+}
+
+status_t BufferItemConsumer::setDefaultBufferDataSpace(
+        android_dataspace defaultDataSpace) {
+    Mutex::Autolock _l(mMutex);
+    return mConsumer->setDefaultBufferDataSpace(defaultDataSpace);
 }
 
 } // namespace android
