@@ -26,7 +26,6 @@
 #include <sys/mman.h>
 
 #include <binder/IMemory.h>
-#include <cutils/log.h>
 #include <utils/KeyedVector.h>
 #include <utils/threads.h>
 #include <utils/Atomic.h>
@@ -188,26 +187,15 @@ sp<IMemoryHeap> BpMemory::getMemory(ssize_t* offset, size_t* size) const
             if (heap != 0) {
                 mHeap = interface_cast<IMemoryHeap>(heap);
                 if (mHeap != 0) {
-                    size_t heapSize = mHeap->getSize();
-                    if (s <= heapSize
-                            && o >= 0
-                            && (static_cast<size_t>(o) <= heapSize - s)) {
-                        mOffset = o;
-                        mSize = s;
-                    } else {
-                        // Hm.
-                        android_errorWriteWithInfoLog(0x534e4554,
-                            "26877992", -1, NULL, 0);
-                        mOffset = 0;
-                        mSize = 0;
-                    }
+                    mOffset = o;
+                    mSize = s;
                 }
             }
         }
     }
     if (offset) *offset = mOffset;
     if (size) *size = mSize;
-    return (mSize > 0) ? mHeap : 0;
+    return mHeap;
 }
 
 // ---------------------------------------------------------------------------
