@@ -25,15 +25,6 @@
 
 namespace android {
 
-// Ignore present (retire) fences if the device doesn't have support for the
-// sync framework
-#if defined(RUNNING_WITHOUT_SYNC_FRAMEWORK)
-static const bool kIgnorePresentFences = true;
-#else
-static const bool kIgnorePresentFences = false;
-#endif
-
-
 class String8;
 class Fence;
 class DispSyncThread;
@@ -63,6 +54,8 @@ public:
 
     explicit DispSync(const char* name);
     ~DispSync();
+
+    void init(bool hasSyncFramework, int64_t dispSyncPresentTimeOffset);
 
     // reset clears the resync samples and error value.
     void reset();
@@ -182,6 +175,14 @@ private:
 
     // mMutex is used to protect access to all member variables.
     mutable Mutex mMutex;
+
+    // This is the offset from the present fence timestamps to the corresponding
+    // vsync event.
+    int64_t mPresentTimeOffset;
+
+    // Ignore present (retire) fences if the device doesn't have support for the
+    // sync framework
+    bool mIgnorePresentFences;
 };
 
 }

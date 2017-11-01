@@ -23,7 +23,7 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <ui/mat4.h>
+#include <math/mat4.h>
 #include <Transform.h>
 
 #define EGL_NO_CONFIG ((EGLConfig)0)
@@ -59,7 +59,10 @@ protected:
     virtual ~RenderEngine() = 0;
 
 public:
-    static RenderEngine* create(EGLDisplay display, int hwcFormat);
+    enum FeatureFlag {
+        WIDE_COLOR_SUPPORT = 1 << 0 // Platform has a wide color display
+    };
+    static RenderEngine* create(EGLDisplay display, int hwcFormat, uint32_t featureFlags);
 
     static EGLConfig chooseEglConfig(EGLDisplay display, int format);
 
@@ -98,6 +101,10 @@ public:
 #ifdef USE_HWC2
     virtual void setupLayerBlending(bool premultipliedAlpha, bool opaque, float alpha) = 0;
     virtual void setupDimLayerBlending(float alpha) = 0;
+    virtual void setColorMode(android_color_mode mode) = 0;
+    virtual void setSourceDataSpace(android_dataspace source) = 0;
+    virtual void setWideColor(bool hasWideColor) = 0;
+    virtual bool usesWideColor() = 0;
 #else
     virtual void setupLayerBlending(bool premultipliedAlpha, bool opaque, int alpha) = 0;
     virtual void setupDimLayerBlending(int alpha) = 0;

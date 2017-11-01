@@ -29,15 +29,16 @@
 #include <inttypes.h>
 
 #include <cutils/properties.h>
+#include <cutils/atomic.h>
 
 #include <gui/BufferItem.h>
 #include <gui/BufferQueueCore.h>
-#include <gui/GraphicBufferAlloc.h>
 #include <gui/IConsumerListener.h>
-#include <gui/IGraphicBufferAlloc.h>
 #include <gui/IProducerListener.h>
 #include <gui/ISurfaceComposer.h>
 #include <private/gui/ComposerService.h>
+
+#include <system/window.h>
 
 namespace android {
 
@@ -53,14 +54,14 @@ static uint64_t getUniqueId() {
     return id | counter++;
 }
 
-BufferQueueCore::BufferQueueCore(const sp<IGraphicBufferAlloc>& allocator) :
-    mAllocator(allocator),
+BufferQueueCore::BufferQueueCore() :
     mMutex(),
     mIsAbandoned(false),
     mConsumerControlledByApp(false),
     mConsumerName(getUniqueName()),
     mConsumerListener(),
     mConsumerUsageBits(0),
+    mConsumerIsProtected(false),
     mConnectedApi(NO_CONNECTED_API),
     mLinkedToDeath(),
     mConnectedProducerListener(),
@@ -93,32 +94,9 @@ BufferQueueCore::BufferQueueCore(const sp<IGraphicBufferAlloc>& allocator) :
     mSharedBufferSlot(INVALID_BUFFER_SLOT),
     mSharedBufferCache(Rect::INVALID_RECT, 0, NATIVE_WINDOW_SCALING_MODE_FREEZE,
             HAL_DATASPACE_UNKNOWN),
+    mLastQueuedSlot(INVALID_BUFFER_SLOT),
     mUniqueId(getUniqueId())
 {
-    if (allocator == NULL) {
-
-#ifdef HAVE_NO_SURFACE_FLINGER
-        // Without a SurfaceFlinger, allocate in-process.  This only makes
-        // sense in systems with static SELinux configurations and no
-        // applications (since applications need dynamic SELinux policy).
-        mAllocator = new GraphicBufferAlloc();
-#else
-        // Run time check for headless, where we also allocate in-process.
-        char value[PROPERTY_VALUE_MAX];
-        property_get("config.headless", value, "0");
-        if (atoi(value) == 1) {
-            mAllocator = new GraphicBufferAlloc();
-        } else {
-            sp<ISurfaceComposer> composer(ComposerService::getComposerService());
-            mAllocator = composer->createGraphicBufferAlloc();
-        }
-#endif  // HAVE_NO_SURFACE_FLINGER
-
-        if (mAllocator == NULL) {
-            BQ_LOGE("createGraphicBufferAlloc failed");
-        }
-    }
-
     int numStartingBuffers = getMaxBufferCountLocked();
     for (int s = 0; s < numStartingBuffers; s++) {
         mFreeSlots.insert(s);
@@ -131,57 +109,63 @@ BufferQueueCore::BufferQueueCore(const sp<IGraphicBufferAlloc>& allocator) :
 
 BufferQueueCore::~BufferQueueCore() {}
 
-void BufferQueueCore::dumpState(String8& result, const char* prefix) const {
+void BufferQueueCore::dumpState(const String8& prefix, String8* outResult) const {
     Mutex::Autolock lock(mMutex);
 
-    String8 fifo;
+    outResult->appendFormat("%s- BufferQueue ", prefix.string());
+    outResult->appendFormat("mMaxAcquiredBufferCount=%d mMaxDequeuedBufferCount=%d\n",
+                            mMaxAcquiredBufferCount, mMaxDequeuedBufferCount);
+    outResult->appendFormat("%s  mDequeueBufferCannotBlock=%d mAsyncMode=%d\n", prefix.string(),
+                            mDequeueBufferCannotBlock, mAsyncMode);
+    outResult->appendFormat("%s  default-size=[%dx%d] default-format=%d ", prefix.string(),
+                            mDefaultWidth, mDefaultHeight, mDefaultBufferFormat);
+    outResult->appendFormat("transform-hint=%02x frame-counter=%" PRIu64, mTransformHint,
+                            mFrameCounter);
+
+    outResult->appendFormat("\n%sFIFO(%zu):\n", prefix.string(), mQueue.size());
     Fifo::const_iterator current(mQueue.begin());
     while (current != mQueue.end()) {
-        fifo.appendFormat("%02d:%p crop=[%d,%d,%d,%d], "
-                "xform=0x%02x, time=%#" PRIx64 ", scale=%s\n",
-                current->mSlot, current->mGraphicBuffer.get(),
-                current->mCrop.left, current->mCrop.top, current->mCrop.right,
-                current->mCrop.bottom, current->mTransform, current->mTimestamp,
-                BufferItem::scalingModeName(current->mScalingMode));
+        double timestamp = current->mTimestamp / 1e9;
+        outResult->appendFormat("%s  %02d:%p ", prefix.string(), current->mSlot,
+                                current->mGraphicBuffer.get());
+        outResult->appendFormat("crop=[%d,%d,%d,%d] ", current->mCrop.left, current->mCrop.top,
+                                current->mCrop.right, current->mCrop.bottom);
+        outResult->appendFormat("xform=0x%02x time=%.4f scale=%s\n", current->mTransform, timestamp,
+                                BufferItem::scalingModeName(current->mScalingMode));
         ++current;
     }
 
-    result.appendFormat("%s-BufferQueue mMaxAcquiredBufferCount=%d, "
-            "mMaxDequeuedBufferCount=%d, mDequeueBufferCannotBlock=%d "
-            "mAsyncMode=%d, default-size=[%dx%d], default-format=%d, "
-            "transform-hint=%02x, FIFO(%zu)={%s}\n", prefix,
-            mMaxAcquiredBufferCount, mMaxDequeuedBufferCount,
-            mDequeueBufferCannotBlock, mAsyncMode, mDefaultWidth,
-            mDefaultHeight, mDefaultBufferFormat, mTransformHint, mQueue.size(),
-            fifo.string());
-
+    outResult->appendFormat("%sSlots:\n", prefix.string());
     for (int s : mActiveBuffers) {
         const sp<GraphicBuffer>& buffer(mSlots[s].mGraphicBuffer);
         // A dequeued buffer might be null if it's still being allocated
         if (buffer.get()) {
-            result.appendFormat("%s%s[%02d:%p] state=%-8s, %p "
-                    "[%4ux%4u:%4u,%3X]\n", prefix,
-                    (mSlots[s].mBufferState.isAcquired()) ? ">" : " ", s,
-                    buffer.get(), mSlots[s].mBufferState.string(),
-                    buffer->handle, buffer->width, buffer->height,
-                    buffer->stride, buffer->format);
+            outResult->appendFormat("%s %s[%02d:%p] ", prefix.string(),
+                                    (mSlots[s].mBufferState.isAcquired()) ? ">" : " ", s,
+                                    buffer.get());
+            outResult->appendFormat("state=%-8s %p frame=%" PRIu64, mSlots[s].mBufferState.string(),
+                                    buffer->handle, mSlots[s].mFrameNumber);
+            outResult->appendFormat(" [%4ux%4u:%4u,%3X]\n", buffer->width, buffer->height,
+                                    buffer->stride, buffer->format);
         } else {
-            result.appendFormat("%s [%02d:%p] state=%-8s\n", prefix, s,
-                    buffer.get(), mSlots[s].mBufferState.string());
+            outResult->appendFormat("%s  [%02d:%p] ", prefix.string(), s, buffer.get());
+            outResult->appendFormat("state=%-8s frame=%" PRIu64 "\n",
+                                    mSlots[s].mBufferState.string(), mSlots[s].mFrameNumber);
         }
     }
     for (int s : mFreeBuffers) {
         const sp<GraphicBuffer>& buffer(mSlots[s].mGraphicBuffer);
-        result.appendFormat("%s [%02d:%p] state=%-8s, %p [%4ux%4u:%4u,%3X]\n",
-                prefix, s, buffer.get(), mSlots[s].mBufferState.string(),
-                buffer->handle, buffer->width, buffer->height, buffer->stride,
-                buffer->format);
+        outResult->appendFormat("%s  [%02d:%p] ", prefix.string(), s, buffer.get());
+        outResult->appendFormat("state=%-8s %p frame=%" PRIu64, mSlots[s].mBufferState.string(),
+                                buffer->handle, mSlots[s].mFrameNumber);
+        outResult->appendFormat(" [%4ux%4u:%4u,%3X]\n", buffer->width, buffer->height,
+                                buffer->stride, buffer->format);
     }
 
     for (int s : mFreeSlots) {
         const sp<GraphicBuffer>& buffer(mSlots[s].mGraphicBuffer);
-        result.appendFormat("%s [%02d:%p] state=%-8s\n", prefix, s,
-                buffer.get(), mSlots[s].mBufferState.string());
+        outResult->appendFormat("%s  [%02d:%p] state=%-8s\n", prefix.string(), s, buffer.get(),
+                                mSlots[s].mBufferState.string());
     }
 }
 
@@ -259,6 +243,13 @@ void BufferQueueCore::freeAllBuffersLocked() {
 
     for (auto& b : mQueue) {
         b.mIsStale = true;
+
+        // We set this to false to force the BufferQueue to resend the buffer
+        // handle upon acquire, since if we're here due to a producer
+        // disconnect, the consumer will have been told to purge its cache of
+        // slot-to-buffer-handle mappings and will not be able to otherwise
+        // obtain a valid buffer handle.
+        b.mAcquireCalled = false;
     }
 
     VALIDATE_CONSISTENCY();

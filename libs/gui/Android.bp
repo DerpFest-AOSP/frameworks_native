@@ -11,14 +11,26 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+cc_library_headers {
+    name: "libgui_headers",
+    vendor_available: true,
+    export_include_dirs: ["include"],
+}
 
 cc_library_shared {
     name: "libgui",
+    vendor_available: true,
+    vndk: {
+        enabled: true,
+    },
 
     clang: true,
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
     cppflags: [
         "-Weverything",
-        "-Werror",
 
         // The static constructors and destructors in this library have not been noted to
         // introduce significant overheads
@@ -38,9 +50,17 @@ cc_library_shared {
         // Don't warn about struct padding
         "-Wno-padded",
 
-        // android/sensors.h uses nested anonymous unions and anonymous structs
-        "-Wno-nested-anon-types",
-        "-Wno-gnu-anonymous-struct",
+        // We are aware of the risks inherent in comparing floats for equality
+        "-Wno-float-equal",
+
+        // Pure abstract classes trigger this warning
+        "-Wno-weak-vtables",
+
+        // Allow four-character integer literals
+	"-Wno-four-char-constants",
+
+        // Allow documentation warnings
+        "-Wno-documentation",
 
         "-DDEBUG_ONLY_CODE=0",
     ],
@@ -49,7 +69,7 @@ cc_library_shared {
         brillo: {
             cflags: ["-DHAVE_NO_SURFACE_FLINGER"],
         },
-        debuggable: {
+        eng: {
             cppflags: [
                 "-UDEBUG_ONLY_CODE",
                 "-DDEBUG_ONLY_CODE=1",
@@ -58,8 +78,6 @@ cc_library_shared {
     },
 
     srcs: [
-        "IGraphicBufferConsumer.cpp",
-        "IConsumerListener.cpp",
         "BitTube.cpp",
         "BufferItem.cpp",
         "BufferItemConsumer.cpp",
@@ -71,41 +89,67 @@ cc_library_shared {
         "ConsumerBase.cpp",
         "CpuConsumer.cpp",
         "DisplayEventReceiver.cpp",
+        "FrameTimestamps.cpp",
         "GLConsumer.cpp",
-        "GraphicBufferAlloc.cpp",
         "GuiConfig.cpp",
         "IDisplayEventConnection.cpp",
-        "IGraphicBufferAlloc.cpp",
+        "IConsumerListener.cpp",
+        "IGraphicBufferConsumer.cpp",
         "IGraphicBufferProducer.cpp",
         "IProducerListener.cpp",
-        "ISensorEventConnection.cpp",
-        "ISensorServer.cpp",
         "ISurfaceComposer.cpp",
         "ISurfaceComposerClient.cpp",
         "LayerState.cpp",
         "OccupancyTracker.cpp",
-        "Sensor.cpp",
-        "SensorEventQueue.cpp",
-        "SensorManager.cpp",
         "StreamSplitter.cpp",
         "Surface.cpp",
         "SurfaceControl.cpp",
         "SurfaceComposerClient.cpp",
         "SyncFeatures.cpp",
+        "view/Surface.cpp",
+        "bufferqueue/1.0/B2HProducerListener.cpp",
+        "bufferqueue/1.0/H2BGraphicBufferProducer.cpp"
     ],
 
     shared_libs: [
+        "libsync",
         "libbinder",
         "libcutils",
         "libEGL",
         "libGLESv2",
-        "libsync",
         "libui",
         "libutils",
+        "libnativewindow",
         "liblog",
+        "libhidlbase",
+        "libhidltransport",
+        "android.hidl.token@1.0-utils",
+        "android.hardware.graphics.bufferqueue@1.0",
+        "android.hardware.configstore@1.0",
+        "android.hardware.configstore-utils",
     ],
 
-    export_shared_lib_headers: ["libbinder"],
+    header_libs: [
+        "libnativebase_headers",
+        "libgui_headers",
+    ],
+
+    export_shared_lib_headers: [
+        "libbinder",
+        "libEGL",
+        "libnativewindow",
+        "libui",
+        "android.hidl.token@1.0-utils",
+        "android.hardware.graphics.bufferqueue@1.0",
+    ],
+
+    export_header_lib_headers: [
+        "libgui_headers",
+    ],
+
+    export_include_dirs: [
+        "include",
+    ],
 }
 
 subdirs = ["tests"]

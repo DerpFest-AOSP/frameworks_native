@@ -14,7 +14,7 @@
 
 // Headers module is in frameworks/native/vulkan/Android.bp.
 ndk_library {
-    name: "libvulkan.ndk",
+    name: "libvulkan",
     symbol_file: "libvulkan.map.txt",
     first_version: "24",
     unversioned_until: "current",
@@ -47,6 +47,7 @@ cc_library_shared {
         "-Wno-c99-extensions",
         "-Wno-c++98-compat-pedantic",
         "-Wno-exit-time-destructors",
+        "-Wno-float-equal",
         "-Wno-global-constructors",
         "-Wno-zero-length-array",
     ],
@@ -63,18 +64,22 @@ cc_library_shared {
         "vulkan_loader_data.cpp",
     ],
 
-    export_static_lib_headers: ["vulkan_headers"],
-    static_libs: [
+    export_header_lib_headers: ["vulkan_headers"],
+    header_libs: [
         "vulkan_headers",
-        "libziparchive",
     ],
     shared_libs: [
+        "libziparchive",
         "libhardware",
         "libsync",
         "libbase",
         "liblog",
+        "libui",
+        "libgraphicsenv",
         "libutils",
         "libcutils",
         "libz",
+        "libnativewindow",
     ],
+    static_libs: ["libgrallocusage"],
 }

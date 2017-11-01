@@ -27,8 +27,9 @@
 
 #include <hardware/hardware.h>
 
+#include <cutils/atomic.h>
+
 #include <gui/BufferItem.h>
-#include <gui/IGraphicBufferAlloc.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
 #include <gui/ConsumerBase.h>
@@ -56,7 +57,8 @@ static int32_t createProcessUniqueId() {
 
 ConsumerBase::ConsumerBase(const sp<IGraphicBufferConsumer>& bufferQueue, bool controlledByApp) :
         mAbandoned(false),
-        mConsumer(bufferQueue) {
+        mConsumer(bufferQueue),
+        mPrevFinalReleaseFence(Fence::NO_FENCE) {
     // Choose a name using the PID and a process-unique ID.
     mName = String8::format("unnamed-%d-%d", getpid(), createProcessUniqueId());
 
@@ -104,7 +106,7 @@ void ConsumerBase::onFrameAvailable(const BufferItem& item) {
 
     sp<FrameAvailableListener> listener;
     { // scope for the lock
-        Mutex::Autolock lock(mMutex);
+        Mutex::Autolock lock(mFrameAvailableMutex);
         listener = mFrameAvailableListener.promote();
     }
 
@@ -119,7 +121,7 @@ void ConsumerBase::onFrameReplaced(const BufferItem &item) {
 
     sp<FrameAvailableListener> listener;
     {
-        Mutex::Autolock lock(mMutex);
+        Mutex::Autolock lock(mFrameAvailableMutex);
         listener = mFrameAvailableListener.promote();
     }
 
@@ -183,7 +185,7 @@ bool ConsumerBase::isAbandoned() {
 void ConsumerBase::setFrameAvailableListener(
         const wp<FrameAvailableListener>& listener) {
     CB_LOGV("setFrameAvailableListener");
-    Mutex::Autolock lock(mMutex);
+    Mutex::Autolock lock(mFrameAvailableMutex);
     mFrameAvailableListener = listener;
 }
 
@@ -251,7 +253,18 @@ status_t ConsumerBase::discardFreeBuffers() {
         CB_LOGE("discardFreeBuffers: ConsumerBase is abandoned!");
         return NO_INIT;
     }
-    return mConsumer->discardFreeBuffers();
+    status_t err = mConsumer->discardFreeBuffers();
+    if (err != OK) {
+        return err;
+    }
+    uint64_t mask;
+    mConsumer->getReleasedBuffers(&mask);
+    for (int i = 0; i < BufferQueue::NUM_BUFFER_SLOTS; i++) {
+        if (mask & (1ULL << i)) {
+            freeBufferLocked(i);
+        }
+    }
+    return OK;
 }
 
 void ConsumerBase::dumpState(String8& result) const {
@@ -267,7 +280,9 @@ void ConsumerBase::dumpLocked(String8& result, const char* prefix) const {
     result.appendFormat("%smAbandoned=%d\n", prefix, int(mAbandoned));
 
     if (!mAbandoned) {
-        mConsumer->dumpState(result, prefix);
+        String8 consumerState;
+        mConsumer->dumpState(String8(prefix), &consumerState);
+        result.append(consumerState);
     }
 }
 
@@ -284,6 +299,9 @@ status_t ConsumerBase::acquireBufferLocked(BufferItem *item,
     }
 
     if (item->mGraphicBuffer != NULL) {
+        if (mSlots[item->mSlot].mGraphicBuffer != NULL) {
+            freeBufferLocked(item->mSlot);
+        }
         mSlots[item->mSlot].mGraphicBuffer = item->mGraphicBuffer;
     }
 
@@ -314,7 +332,28 @@ status_t ConsumerBase::addReleaseFenceLocked(int slot,
 
     if (!mSlots[slot].mFence.get()) {
         mSlots[slot].mFence = fence;
-    } else {
+        return OK;
+    }
+
+    // Check status of fences first because merging is expensive.
+    // Merging an invalid fence with any other fence results in an
+    // invalid fence.
+    auto currentStatus = mSlots[slot].mFence->getStatus();
+    if (currentStatus == Fence::Status::Invalid) {
+        CB_LOGE("Existing fence has invalid state");
+        return BAD_VALUE;
+    }
+
+    auto incomingStatus = fence->getStatus();
+    if (incomingStatus == Fence::Status::Invalid) {
+        CB_LOGE("New fence has invalid state");
+        mSlots[slot].mFence = fence;
+        return BAD_VALUE;
+    }
+
+    // If both fences are signaled or both are unsignaled, we need to merge
+    // them to get an accurate timestamp.
+    if (currentStatus == incomingStatus) {
         char fenceName[32] = {};
         snprintf(fenceName, 32, "%.28s:%d", mName.string(), slot);
         sp<Fence> mergedFence = Fence::merge(
@@ -327,7 +366,17 @@ status_t ConsumerBase::addReleaseFenceLocked(int slot,
             return BAD_VALUE;
         }
         mSlots[slot].mFence = mergedFence;
+    } else if (incomingStatus == Fence::Status::Unsignaled) {
+        // If one fence has signaled and the other hasn't, the unsignaled
+        // fence will approximately correspond with the correct timestamp.
+        // There's a small race if both fences signal at about the same time
+        // and their statuses are retrieved with unfortunate timing. However,
+        // by this point, they will have both signaled and only the timestamp
+        // will be slightly off; any dependencies after this point will
+        // already have been met.
+        mSlots[slot].mFence = fence;
     }
+    // else if (currentStatus == Fence::Status::Unsignaled) is a no-op.
 
     return OK;
 }
@@ -354,6 +403,7 @@ status_t ConsumerBase::releaseBufferLocked(
         freeBufferLocked(slot);
     }
 
+    mPrevFinalReleaseFence = mSlots[slot].mFence;
     mSlots[slot].mFence = Fence::NO_FENCE;
 
     return err;

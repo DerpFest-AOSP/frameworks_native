@@ -12,8 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+cc_library_headers {
+    name: "libbinder_headers",
+    export_include_dirs: ["include"],
+    vendor_available: true,
+    header_libs: [
+        "libbase_headers",
+        "libcutils_headers",
+        "libutils_headers",
+    ],
+    export_header_lib_headers: [
+        "libbase_headers",
+        "libcutils_headers",
+        "libutils_headers",
+    ],
+}
+
 cc_library {
     name: "libbinder",
+
+    // for vndbinder
+    vendor_available: true,
+    vndk: {
+        enabled: true,
+    },
 
     srcs: [
         "AppOpsManager.cpp",
@@ -21,6 +43,7 @@ cc_library {
         "BpBinder.cpp",
         "BufferedTextOutput.cpp",
         "Debug.cpp",
+        "IActivityManager.cpp",
         "IAppOpsCallback.cpp",
         "IAppOpsService.cpp",
         "IBatteryStats.cpp",
@@ -32,6 +55,7 @@ cc_library {
         "IProcessInfoService.cpp",
         "IResultReceiver.cpp",
         "IServiceManager.cpp",
+        "IShellCallback.cpp",
         "MemoryBase.cpp",
         "MemoryDealer.cpp",
         "MemoryHeapBase.cpp",
@@ -43,6 +67,8 @@ cc_library {
         "Static.cpp",
         "Status.cpp",
         "TextOutput.cpp",
+        "IpPrefix.cpp",
+        "Value.cpp",
     ],
 
     cflags: [
@@ -62,9 +88,13 @@ cc_library {
         "libcutils",
         "libutils",
     ],
-    export_shared_lib_headers: [
-        "libbase",
-        "libutils",
+
+    header_libs: [
+        "libbinder_headers",
+    ],
+
+    export_header_lib_headers: [
+        "libbinder_headers",
     ],
 
     clang: true,

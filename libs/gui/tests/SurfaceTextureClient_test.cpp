@@ -23,11 +23,12 @@
 #include <gtest/gtest.h>
 #include <gui/GLConsumer.h>
 #include <gui/Surface.h>
+#include <gui/BufferQueue.h>
 #include <system/graphics.h>
 #include <utils/Log.h>
 #include <utils/Thread.h>
 
-EGLAPI const char* eglQueryStringImplementationANDROID(EGLDisplay dpy, EGLint name);
+extern "C" EGLAPI const char* eglQueryStringImplementationANDROID(EGLDisplay dpy, EGLint name);
 #define CROP_EXT_STR "EGL_ANDROID_image_crop"
 
 namespace android {

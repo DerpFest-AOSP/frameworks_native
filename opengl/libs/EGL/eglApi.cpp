@@ -21,46 +21,39 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <hardware/gralloc.h>
-#include <system/window.h>
+#include <hardware/gralloc1.h>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
-#include <cutils/atomic.h>
+#include <android/hardware_buffer.h>
+#include <private/android/AHardwareBufferHelpers.h>
+
 #include <cutils/compiler.h>
-#include <cutils/memory.h>
 #include <cutils/properties.h>
 #include <log/log.h>
 
-#include <gui/ISurfaceComposer.h>
-
-#include <ui/GraphicBuffer.h>
-
-#include <utils/KeyedVector.h>
-#include <utils/SortedVector.h>
-#include <utils/String8.h>
-#include <utils/Trace.h>
-
-#include "binder/Binder.h"
-#include "binder/Parcel.h"
-#include "binder/IServiceManager.h"
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <unordered_map>
+#include <string>
+#include <thread>
 
 #include "../egl_impl.h"
-#include "../hooks.h"
 
 #include "egl_display.h"
 #include "egl_object.h"
 #include "egl_tls.h"
-#include "egldefs.h"
+#include "egl_trace.h"
 
 using namespace android;
-
-#define ENABLE_EGL_ANDROID_GET_FRAME_TIMESTAMPS 0
 
 // ----------------------------------------------------------------------------
 
 namespace android {
+
+using nsecs_t = int64_t;
 
 struct extention_map_t {
     const char* name;
@@ -82,17 +75,21 @@ struct extention_map_t {
  *
  * NOTE: Both strings MUST have a single space as the last character.
  */
-extern char const * const gBuiltinExtensionString =
+
+extern char const * const gBuiltinExtensionString;
+extern char const * const gExtensionString;
+
+// clang-format off
+char const * const gBuiltinExtensionString =
         "EGL_KHR_get_all_proc_addresses "
         "EGL_ANDROID_presentation_time "
         "EGL_KHR_swap_buffers_with_damage "
-        "EGL_ANDROID_create_native_client_buffer "
+        "EGL_ANDROID_get_native_client_buffer "
         "EGL_ANDROID_front_buffer_auto_refresh "
-#if ENABLE_EGL_ANDROID_GET_FRAME_TIMESTAMPS
         "EGL_ANDROID_get_frame_timestamps "
-#endif
         ;
-extern char const * const gExtensionString  =
+
+char const * const gExtensionString  =
         "EGL_KHR_image "                        // mandatory
         "EGL_KHR_image_base "                   // mandatory
         "EGL_KHR_image_pixmap "
@@ -118,13 +115,16 @@ extern char const * const gExtensionString  =
         "EGL_KHR_wait_sync "                    // strongly recommended
         "EGL_ANDROID_recordable "               // mandatory
         "EGL_KHR_partial_update "               // strongly recommended
+        "EGL_EXT_pixel_format_float "
         "EGL_EXT_buffer_age "                   // strongly recommended with partial_update
         "EGL_KHR_create_context_no_error "
         "EGL_KHR_mutable_render_buffer "
         "EGL_EXT_yuv_surface "
         "EGL_EXT_protected_content "
         "EGL_IMG_context_priority "
+        "EGL_KHR_no_config_context "
         ;
+// clang-format on
 
 // extensions not exposed to applications but used by the ANDROID system
 //      "EGL_ANDROID_blob_cache "               // strongly recommended
@@ -181,9 +181,9 @@ static const extention_map_t sExtensionMap[] = {
     { "eglSwapBuffersWithDamageKHR",
             (__eglMustCastToProperFunctionPointerType)&eglSwapBuffersWithDamageKHR },
 
-    // EGL_ANDROID_native_client_buffer
-    { "eglCreateNativeClientBufferANDROID",
-            (__eglMustCastToProperFunctionPointerType)&eglCreateNativeClientBufferANDROID },
+    // EGL_ANDROID_get_native_client_buffer
+    { "eglGetNativeClientBufferANDROID",
+            (__eglMustCastToProperFunctionPointerType)&eglGetNativeClientBufferANDROID },
 
     // EGL_KHR_partial_update
     { "eglSetDamageRegionKHR",
@@ -215,10 +215,20 @@ static const extention_map_t sExtensionMap[] = {
             (__eglMustCastToProperFunctionPointerType)&eglCreateStreamFromFileDescriptorKHR },
 
     // EGL_ANDROID_get_frame_timestamps
+    { "eglGetNextFrameIdANDROID",
+            (__eglMustCastToProperFunctionPointerType)&eglGetNextFrameIdANDROID },
+    { "eglGetCompositorTimingANDROID",
+            (__eglMustCastToProperFunctionPointerType)&eglGetCompositorTimingANDROID },
+    { "eglGetCompositorTimingSupportedANDROID",
+            (__eglMustCastToProperFunctionPointerType)&eglGetCompositorTimingSupportedANDROID },
     { "eglGetFrameTimestampsANDROID",
             (__eglMustCastToProperFunctionPointerType)&eglGetFrameTimestampsANDROID },
-    { "eglQueryTimestampSupportedANDROID",
-            (__eglMustCastToProperFunctionPointerType)&eglQueryTimestampSupportedANDROID },
+    { "eglGetFrameTimestampSupportedANDROID",
+            (__eglMustCastToProperFunctionPointerType)&eglGetFrameTimestampSupportedANDROID },
+
+    // EGL_ANDROID_native_fence_sync
+    { "eglDupNativeFenceFDANDROID",
+            (__eglMustCastToProperFunctionPointerType)&eglDupNativeFenceFDANDROID },
 };
 
 /*
@@ -228,13 +238,13 @@ static const extention_map_t sExtensionMap[] = {
 #define FILTER_EXTENSIONS(procname) \
         (!strcmp((procname), "eglSetBlobCacheFuncsANDROID") ||    \
          !strcmp((procname), "eglHibernateProcessIMG")      ||    \
-         !strcmp((procname), "eglAwakenProcessIMG")         ||    \
-         !strcmp((procname), "eglDupNativeFenceFDANDROID"))
+         !strcmp((procname), "eglAwakenProcessIMG"))
 
 
 
 // accesses protected by sExtensionMapMutex
-static DefaultKeyedVector<String8, __eglMustCastToProperFunctionPointerType> sGLExtentionMap;
+static std::unordered_map<std::string, __eglMustCastToProperFunctionPointerType> sGLExtentionMap;
+
 static int sGLExtentionSlot = 0;
 static pthread_mutex_t sExtensionMapMutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -267,6 +277,7 @@ static inline EGLContext getContext() { return egl_tls_t::getContext(); }
 
 EGLDisplay eglGetDisplay(EGLNativeDisplayType display)
 {
+    ATRACE_CALL();
     clearError();
 
     uintptr_t index = reinterpret_cast<uintptr_t>(display);
@@ -291,7 +302,7 @@ EGLBoolean eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
     clearError();
 
     egl_display_ptr dp = get_display(dpy);
-    if (!dp) return setError(EGL_BAD_DISPLAY, EGL_FALSE);
+    if (!dp) return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
 
     EGLBoolean res = dp->initialize(major, minor);
 
@@ -307,7 +318,7 @@ EGLBoolean eglTerminate(EGLDisplay dpy)
     clearError();
 
     egl_display_ptr dp = get_display(dpy);
-    if (!dp) return setError(EGL_BAD_DISPLAY, EGL_FALSE);
+    if (!dp) return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
 
     EGLBoolean res = dp->terminate();
 
@@ -328,7 +339,7 @@ EGLBoolean eglGetConfigs(   EGLDisplay dpy,
     if (!dp) return EGL_FALSE;
 
     if (num_config==0) {
-        return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+        return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
     }
 
     EGLBoolean res = EGL_FALSE;
@@ -353,7 +364,7 @@ EGLBoolean eglChooseConfig( EGLDisplay dpy, const EGLint *attrib_list,
     if (!dp) return EGL_FALSE;
 
     if (num_config==0) {
-        return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+        return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
     }
 
     EGLBoolean res = EGL_FALSE;
@@ -384,6 +395,8 @@ EGLBoolean eglChooseConfig( EGLDisplay dpy, const EGLint *attrib_list,
                             break;
                         case EGL_CONFIG_CAVEAT:
                             attribCaveat = &attrib_list[attribCount];
+                            break;
+                        default:
                             break;
                     }
                     attribCount++;
@@ -441,14 +454,214 @@ EGLBoolean eglGetConfigAttrib(EGLDisplay dpy, EGLConfig config,
 // EGL_GL_COLORSPACE_SRGB_KHR, or turn sRGB formats into corresponding linear
 // formats when colorspace is EGL_GL_COLORSPACE_LINEAR_KHR. In any cases where
 // the modification isn't possible, the original dataSpace is returned.
-static android_dataspace modifyBufferDataspace( android_dataspace dataSpace,
-                                                EGLint colorspace) {
+static android_dataspace modifyBufferDataspace(android_dataspace dataSpace,
+                                               EGLint colorspace) {
     if (colorspace == EGL_GL_COLORSPACE_LINEAR_KHR) {
         return HAL_DATASPACE_SRGB_LINEAR;
     } else if (colorspace == EGL_GL_COLORSPACE_SRGB_KHR) {
         return HAL_DATASPACE_SRGB;
+    } else if (colorspace == EGL_GL_COLORSPACE_DISPLAY_P3_EXT) {
+        return HAL_DATASPACE_DISPLAY_P3;
+    } else if (colorspace == EGL_GL_COLORSPACE_DISPLAY_P3_LINEAR_EXT) {
+        return HAL_DATASPACE_DISPLAY_P3_LINEAR;
+    } else if (colorspace == EGL_GL_COLORSPACE_SCRGB_EXT) {
+        return HAL_DATASPACE_V0_SCRGB;
+    } else if (colorspace == EGL_GL_COLORSPACE_SCRGB_LINEAR_EXT) {
+        return HAL_DATASPACE_V0_SCRGB_LINEAR;
     }
     return dataSpace;
+}
+
+// Return true if we stripped any EGL_GL_COLORSPACE_KHR attributes.
+static EGLBoolean stripColorSpaceAttribute(egl_display_ptr dp, const EGLint* attrib_list,
+                                           EGLint format,
+                                           std::vector<EGLint>& stripped_attrib_list) {
+    std::vector<EGLint> allowedColorSpaces;
+    switch (format) {
+        case HAL_PIXEL_FORMAT_RGBA_8888:
+        case HAL_PIXEL_FORMAT_RGB_565:
+            // driver okay with linear & sRGB for 8888, but can't handle
+            // Display-P3 or other spaces.
+            allowedColorSpaces.push_back(EGL_GL_COLORSPACE_SRGB_KHR);
+            allowedColorSpaces.push_back(EGL_GL_COLORSPACE_LINEAR_KHR);
+            break;
+
+        case HAL_PIXEL_FORMAT_RGBA_FP16:
+        case HAL_PIXEL_FORMAT_RGBA_1010102:
+        default:
+            // driver does not want to see colorspace attributes for 1010102 or fp16.
+            // Future: if driver supports XXXX extension, we can pass down that colorspace
+            break;
+    }
+
+    bool stripped = false;
+    if (attrib_list && dp->haveExtension("EGL_KHR_gl_colorspace")) {
+        for (const EGLint* attr = attrib_list; attr[0] != EGL_NONE; attr += 2) {
+            if (attr[0] == EGL_GL_COLORSPACE_KHR) {
+                EGLint colorSpace = attr[1];
+                bool found = false;
+                // Verify that color space is allowed
+                for (auto it : allowedColorSpaces) {
+                    if (colorSpace == it) {
+                        found = true;
+                    }
+                }
+                if (!found) {
+                    stripped = true;
+                } else {
+                    stripped_attrib_list.push_back(attr[0]);
+                    stripped_attrib_list.push_back(attr[1]);
+                }
+            } else {
+                stripped_attrib_list.push_back(attr[0]);
+                stripped_attrib_list.push_back(attr[1]);
+            }
+        }
+    }
+    if (stripped) {
+        stripped_attrib_list.push_back(EGL_NONE);
+        stripped_attrib_list.push_back(EGL_NONE);
+    }
+    return stripped;
+}
+
+static EGLBoolean getColorSpaceAttribute(egl_display_ptr dp, NativeWindowType window,
+                                         const EGLint* attrib_list, EGLint& colorSpace,
+                                         android_dataspace& dataSpace) {
+    colorSpace = EGL_GL_COLORSPACE_LINEAR_KHR;
+    dataSpace = HAL_DATASPACE_UNKNOWN;
+
+    if (attrib_list && dp->haveExtension("EGL_KHR_gl_colorspace")) {
+        for (const EGLint* attr = attrib_list; *attr != EGL_NONE; attr += 2) {
+            if (*attr == EGL_GL_COLORSPACE_KHR) {
+                colorSpace = attr[1];
+                bool found = false;
+                bool verify = true;
+                // Verify that color space is allowed
+                if (colorSpace == EGL_GL_COLORSPACE_SRGB_KHR ||
+                    colorSpace == EGL_GL_COLORSPACE_LINEAR_KHR) {
+                    // SRGB and LINEAR are always supported when EGL_KHR_gl_colorspace
+                    // is available, so no need to verify.
+                    found = true;
+                    verify = false;
+                } else if (colorSpace == EGL_EXT_gl_colorspace_bt2020_linear &&
+                           dp->haveExtension("EGL_EXT_gl_colorspace_bt2020_linear")) {
+                    found = true;
+                } else if (colorSpace == EGL_EXT_gl_colorspace_bt2020_pq &&
+                           dp->haveExtension("EGL_EXT_gl_colorspace_bt2020_pq")) {
+                    found = true;
+                } else if (colorSpace == EGL_GL_COLORSPACE_SCRGB_EXT &&
+                           dp->haveExtension("EGL_EXT_gl_colorspace_scrgb")) {
+                    found = true;
+                } else if (colorSpace == EGL_GL_COLORSPACE_SCRGB_LINEAR_EXT &&
+                           dp->haveExtension("EGL_EXT_gl_colorspace_scrgb_linear")) {
+                    found = true;
+                } else if (colorSpace == EGL_GL_COLORSPACE_DISPLAY_P3_LINEAR_EXT &&
+                           dp->haveExtension("EGL_EXT_gl_colorspace_display_p3_linear")) {
+                    found = true;
+                } else if (colorSpace == EGL_GL_COLORSPACE_DISPLAY_P3_EXT &&
+                           dp->haveExtension("EGL_EXT_gl_colorspace_display_p3")) {
+                    found = true;
+                }
+                if (!found) {
+                    return false;
+                }
+                if (verify && window) {
+                    bool wide_color_support = true;
+                    // Ordinarily we'd put a call to native_window_get_wide_color_support
+                    // at the beginning of the function so that we'll have the
+                    // result when needed elsewhere in the function.
+                    // However, because eglCreateWindowSurface is called by SurfaceFlinger and
+                    // SurfaceFlinger is required to answer the call below we would
+                    // end up in a deadlock situation. By moving the call to only happen
+                    // if the application has specifically asked for wide-color we avoid
+                    // the deadlock with SurfaceFlinger since it will not ask for a
+                    // wide-color surface.
+                    int err = native_window_get_wide_color_support(window, &wide_color_support);
+
+                    if (err) {
+                        ALOGE("getColorSpaceAttribute: invalid window (win=%p) "
+                              "failed (%#x) (already connected to another API?)",
+                              window, err);
+                        return false;
+                    }
+                    if (!wide_color_support) {
+                        // Application has asked for a wide-color colorspace but
+                        // wide-color support isn't available on the display the window is on.
+                        return false;
+                    }
+                }
+                // Only change the dataSpace from default if the application
+                // has explicitly set the color space with a EGL_GL_COLORSPACE_KHR attribute.
+                dataSpace = modifyBufferDataspace(dataSpace, colorSpace);
+            }
+        }
+    }
+    return true;
+}
+
+static EGLBoolean getColorSpaceAttribute(egl_display_ptr dp, const EGLint* attrib_list,
+                                         EGLint& colorSpace, android_dataspace& dataSpace) {
+    return getColorSpaceAttribute(dp, NULL, attrib_list, colorSpace, dataSpace);
+}
+
+void getNativePixelFormat(EGLDisplay dpy, egl_connection_t* cnx, EGLConfig config, EGLint& format) {
+    // Set the native window's buffers format to match what this config requests.
+    // Whether to use sRGB gamma is not part of the EGLconfig, but is part
+    // of our native format. So if sRGB gamma is requested, we have to
+    // modify the EGLconfig's format before setting the native window's
+    // format.
+
+    EGLint componentType = EGL_COLOR_COMPONENT_TYPE_FIXED_EXT;
+    cnx->egl.eglGetConfigAttrib(dpy, config, EGL_COLOR_COMPONENT_TYPE_EXT, &componentType);
+
+    EGLint a = 0;
+    EGLint r, g, b;
+    r = g = b = 0;
+    cnx->egl.eglGetConfigAttrib(dpy, config, EGL_RED_SIZE, &r);
+    cnx->egl.eglGetConfigAttrib(dpy, config, EGL_GREEN_SIZE, &g);
+    cnx->egl.eglGetConfigAttrib(dpy, config, EGL_BLUE_SIZE, &b);
+    cnx->egl.eglGetConfigAttrib(dpy, config, EGL_ALPHA_SIZE, &a);
+    EGLint colorDepth = r + g + b;
+
+    // Today, the driver only understands sRGB and linear on 888X
+    // formats. Strip other colorspaces from the attribute list and
+    // only use them to set the dataspace via
+    // native_window_set_buffers_dataspace
+    // if pixel format is RGBX 8888
+    //    TBD: Can test for future extensions that indicate that driver
+    //    handles requested color space and we can let it through.
+    //    allow SRGB and LINEAR. All others need to be stripped.
+    // else if 565, 4444
+    //    TBD: Can we assume these are supported if 8888 is?
+    // else if FP16 or 1010102
+    //    strip colorspace from attribs.
+    // endif
+    if (a == 0) {
+        if (colorDepth <= 16) {
+            format = HAL_PIXEL_FORMAT_RGB_565;
+        } else {
+            if (componentType == EGL_COLOR_COMPONENT_TYPE_FIXED_EXT) {
+                if (colorDepth > 24) {
+                    format = HAL_PIXEL_FORMAT_RGBA_1010102;
+                } else {
+                    format = HAL_PIXEL_FORMAT_RGBX_8888;
+                }
+            } else {
+                format = HAL_PIXEL_FORMAT_RGBA_FP16;
+            }
+        }
+    } else {
+        if (componentType == EGL_COLOR_COMPONENT_TYPE_FIXED_EXT) {
+            if (colorDepth > 24) {
+                format = HAL_PIXEL_FORMAT_RGBA_1010102;
+            } else {
+                format = HAL_PIXEL_FORMAT_RGBA_8888;
+            }
+        } else {
+            format = HAL_PIXEL_FORMAT_RGBA_FP16;
+        }
+    }
 }
 
 EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
@@ -462,50 +675,40 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
     if (dp) {
         EGLDisplay iDpy = dp->disp.dpy;
 
+        if (!window) {
+            return setError(EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
+        }
+
+        int value = 0;
+        window->query(window, NATIVE_WINDOW_IS_VALID, &value);
+        if (!value) {
+            return setError(EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
+        }
+
         int result = native_window_api_connect(window, NATIVE_WINDOW_API_EGL);
-        if (result != OK) {
+        if (result < 0) {
             ALOGE("eglCreateWindowSurface: native_window_api_connect (win=%p) "
                     "failed (%#x) (already connected to another API?)",
                     window, result);
             return setError(EGL_BAD_ALLOC, EGL_NO_SURFACE);
         }
 
-        // Set the native window's buffers format to match what this config requests.
-        // Whether to use sRGB gamma is not part of the EGLconfig, but is part
-        // of our native format. So if sRGB gamma is requested, we have to
-        // modify the EGLconfig's format before setting the native window's
-        // format.
+        EGLint format;
+        getNativePixelFormat(iDpy, cnx, config, format);
 
-        // by default, just pick RGBA_8888
-        EGLint format = HAL_PIXEL_FORMAT_RGBA_8888;
-        android_dataspace dataSpace = HAL_DATASPACE_UNKNOWN;
-
-        EGLint a = 0;
-        cnx->egl.eglGetConfigAttrib(iDpy, config, EGL_ALPHA_SIZE, &a);
-        if (a > 0) {
-            // alpha-channel requested, there's really only one suitable format
-            format = HAL_PIXEL_FORMAT_RGBA_8888;
-        } else {
-            EGLint r, g, b;
-            r = g = b = 0;
-            cnx->egl.eglGetConfigAttrib(iDpy, config, EGL_RED_SIZE,   &r);
-            cnx->egl.eglGetConfigAttrib(iDpy, config, EGL_GREEN_SIZE, &g);
-            cnx->egl.eglGetConfigAttrib(iDpy, config, EGL_BLUE_SIZE,  &b);
-            EGLint colorDepth = r + g + b;
-            if (colorDepth <= 16) {
-                format = HAL_PIXEL_FORMAT_RGB_565;
-            } else {
-                format = HAL_PIXEL_FORMAT_RGBX_8888;
-            }
+        // now select correct colorspace and dataspace based on user's attribute list
+        EGLint colorSpace;
+        android_dataspace dataSpace;
+        if (!getColorSpaceAttribute(dp, window, attrib_list, colorSpace, dataSpace)) {
+            ALOGE("error invalid colorspace: %d", colorSpace);
+            return setError(EGL_BAD_ATTRIBUTE, EGL_NO_SURFACE);
         }
 
-        // now select a corresponding sRGB format if needed
-        if (attrib_list && dp->haveExtension("EGL_KHR_gl_colorspace")) {
-            for (const EGLint* attr = attrib_list; *attr != EGL_NONE; attr += 2) {
-                if (*attr == EGL_GL_COLORSPACE_KHR) {
-                    dataSpace = modifyBufferDataspace(dataSpace, *(attr+1));
-                }
-            }
+        std::vector<EGLint> strippedAttribList;
+        if (stripColorSpaceAttribute(dp, attrib_list, format, strippedAttribList)) {
+            // Had to modify the attribute list due to use of color space.
+            // Use modified list from here on.
+            attrib_list = strippedAttribList.data();
         }
 
         if (format != 0) {
@@ -536,8 +739,8 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
         EGLSurface surface = cnx->egl.eglCreateWindowSurface(
                 iDpy, config, window, attrib_list);
         if (surface != EGL_NO_SURFACE) {
-            egl_surface_t* s = new egl_surface_t(dp.get(), config, window,
-                    surface, cnx);
+            egl_surface_t* s =
+                    new egl_surface_t(dp.get(), config, window, surface, colorSpace, cnx);
             return s;
         }
 
@@ -556,12 +759,19 @@ EGLSurface eglCreatePixmapSurface(  EGLDisplay dpy, EGLConfig config,
 
     egl_connection_t* cnx = NULL;
     egl_display_ptr dp = validate_display_connection(dpy, cnx);
+    EGLint colorSpace;
+    android_dataspace dataSpace;
     if (dp) {
+        // now select a corresponding sRGB format if needed
+        if (!getColorSpaceAttribute(dp, attrib_list, colorSpace, dataSpace)) {
+            ALOGE("error invalid colorspace: %d", colorSpace);
+            return setError(EGL_BAD_ATTRIBUTE, EGL_NO_SURFACE);
+        }
+
         EGLSurface surface = cnx->egl.eglCreatePixmapSurface(
                 dp->disp.dpy, config, pixmap, attrib_list);
         if (surface != EGL_NO_SURFACE) {
-            egl_surface_t* s = new egl_surface_t(dp.get(), config, NULL,
-                    surface, cnx);
+            egl_surface_t* s = new egl_surface_t(dp.get(), config, NULL, surface, colorSpace, cnx);
             return s;
         }
     }
@@ -576,11 +786,32 @@ EGLSurface eglCreatePbufferSurface( EGLDisplay dpy, EGLConfig config,
     egl_connection_t* cnx = NULL;
     egl_display_ptr dp = validate_display_connection(dpy, cnx);
     if (dp) {
+        EGLDisplay iDpy = dp->disp.dpy;
+        EGLint format;
+        getNativePixelFormat(iDpy, cnx, config, format);
+
+        // now select correct colorspace and dataspace based on user's attribute list
+        EGLint colorSpace;
+        android_dataspace dataSpace;
+        if (!getColorSpaceAttribute(dp, attrib_list, colorSpace, dataSpace)) {
+            ALOGE("error invalid colorspace: %d", colorSpace);
+            return setError(EGL_BAD_ATTRIBUTE, EGL_NO_SURFACE);
+        }
+
+        // Pbuffers are not displayed so we don't need to store the
+        // colorspace. We do need to filter out color spaces the
+        // driver doesn't know how to process.
+        std::vector<EGLint> strippedAttribList;
+        if (stripColorSpaceAttribute(dp, attrib_list, format, strippedAttribList)) {
+            // Had to modify the attribute list due to use of color space.
+            // Use modified list from here on.
+            attrib_list = strippedAttribList.data();
+        }
+
         EGLSurface surface = cnx->egl.eglCreatePbufferSurface(
                 dp->disp.dpy, config, attrib_list);
         if (surface != EGL_NO_SURFACE) {
-            egl_surface_t* s = new egl_surface_t(dp.get(), config, NULL,
-                    surface, cnx);
+            egl_surface_t* s = new egl_surface_t(dp.get(), config, NULL, surface, colorSpace, cnx);
             return s;
         }
     }
@@ -596,7 +827,7 @@ EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface surface)
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t * const s = get_surface(surface);
     EGLBoolean result = s->cnx->egl.eglDestroySurface(dp->disp.dpy, s->surface);
@@ -616,9 +847,13 @@ EGLBoolean eglQuerySurface( EGLDisplay dpy, EGLSurface surface,
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t const * const s = get_surface(surface);
+    if (attribute == EGL_GL_COLORSPACE_KHR) {
+        *value = s->getColorSpace();
+        return EGL_TRUE;
+    }
     return s->cnx->egl.eglQuerySurface(
             dp->disp.dpy, s->surface, attribute, value);
 }
@@ -635,7 +870,6 @@ void EGLAPI eglBeginFrame(EGLDisplay dpy, EGLSurface surface) {
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get()) {
         setError(EGL_BAD_SURFACE, EGL_FALSE);
-        return;
     }
 }
 
@@ -694,7 +928,7 @@ EGLBoolean eglDestroyContext(EGLDisplay dpy, EGLContext ctx)
 
     ContextRef _c(dp.get(), ctx);
     if (!_c.get())
-        return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+        return setError(EGL_BAD_CONTEXT, (EGLBoolean)EGL_FALSE);
 
     egl_context_t * const c = get_context(ctx);
     EGLBoolean result = c->cnx->egl.eglDestroyContext(dp->disp.dpy, c->context);
@@ -710,14 +944,14 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
     clearError();
 
     egl_display_ptr dp = validate_display(dpy);
-    if (!dp) return setError(EGL_BAD_DISPLAY, EGL_FALSE);
+    if (!dp) return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
 
     // If ctx is not EGL_NO_CONTEXT, read is not EGL_NO_SURFACE, or draw is not
     // EGL_NO_SURFACE, then an EGL_NOT_INITIALIZED error is generated if dpy is
     // a valid but uninitialized display.
     if ( (ctx != EGL_NO_CONTEXT) || (read != EGL_NO_SURFACE) ||
          (draw != EGL_NO_SURFACE) ) {
-        if (!dp->isReady()) return setError(EGL_NOT_INITIALIZED, EGL_FALSE);
+        if (!dp->isReady()) return setError(EGL_NOT_INITIALIZED, (EGLBoolean)EGL_FALSE);
     }
 
     // get a reference to the object passed in
@@ -728,7 +962,7 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
     // validate the context (if not EGL_NO_CONTEXT)
     if ((ctx != EGL_NO_CONTEXT) && !_c.get()) {
         // EGL_NO_CONTEXT is valid
-        return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+        return setError(EGL_BAD_CONTEXT, (EGLBoolean)EGL_FALSE);
     }
 
     // these are the underlying implementation's object
@@ -751,7 +985,7 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
         // no context given, use the implementation of the current context
         if (draw != EGL_NO_SURFACE || read != EGL_NO_SURFACE) {
             // calling eglMakeCurrent( ..., !=0, !=0, EGL_NO_CONTEXT);
-            return setError(EGL_BAD_MATCH, EGL_FALSE);
+            return setError(EGL_BAD_MATCH, (EGLBoolean)EGL_FALSE);
         }
         if (cur_c == NULL) {
             // no current context
@@ -762,14 +996,14 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
 
     // retrieve the underlying implementation's draw EGLSurface
     if (draw != EGL_NO_SURFACE) {
-        if (!_d.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        if (!_d.get()) return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
         d = get_surface(draw);
         impl_draw = d->surface;
     }
 
     // retrieve the underlying implementation's read EGLSurface
     if (read != EGL_NO_SURFACE) {
-        if (!_r.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        if (!_r.get()) return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
         r = get_surface(read);
         impl_read = r->surface;
     }
@@ -791,9 +1025,41 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
             egl_tls_t::setContext(EGL_NO_CONTEXT);
         }
     } else {
+
+        if (cur_c != NULL) {
+            // Force return to current context for drivers that cannot handle errors
+            EGLBoolean restore_result = EGL_FALSE;
+            // get a reference to the old current objects
+            ContextRef _c2(dp.get(), cur_c);
+            SurfaceRef _d2(dp.get(), cur_c->draw);
+            SurfaceRef _r2(dp.get(), cur_c->read);
+
+            c = cur_c;
+            impl_ctx = c->context;
+            impl_draw = EGL_NO_SURFACE;
+            if (cur_c->draw != EGL_NO_SURFACE) {
+                d = get_surface(cur_c->draw);
+                impl_draw = d->surface;
+            }
+            impl_read = EGL_NO_SURFACE;
+            if (cur_c->read != EGL_NO_SURFACE) {
+                r = get_surface(cur_c->read);
+                impl_read = r->surface;
+            }
+            restore_result = dp->makeCurrent(c, cur_c,
+                    cur_c->draw, cur_c->read, cur_c->context,
+                    impl_draw, impl_read, impl_ctx);
+            if (restore_result == EGL_TRUE) {
+                _c2.acquire();
+                _r2.acquire();
+                _d2.acquire();
+            } else {
+                ALOGE("Could not restore original EGL context");
+            }
+        }
         // this will ALOGE the error
         egl_connection_t* const cnx = &gEGLImpl;
-        result = setError(cnx->egl.eglGetError(), EGL_FALSE);
+        result = setError(cnx->egl.eglGetError(), (EGLBoolean)EGL_FALSE);
     }
     return result;
 }
@@ -808,7 +1074,7 @@ EGLBoolean eglQueryContext( EGLDisplay dpy, EGLContext ctx,
     if (!dp) return EGL_FALSE;
 
     ContextRef _c(dp.get(), ctx);
-    if (!_c.get()) return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+    if (!_c.get()) return setError(EGL_BAD_CONTEXT, (EGLBoolean)EGL_FALSE);
 
     egl_context_t * const c = get_context(ctx);
     return c->cnx->egl.eglQueryContext(
@@ -869,7 +1135,7 @@ EGLBoolean eglWaitGL(void)
 
     egl_connection_t* const cnx = &gEGLImpl;
     if (!cnx->dso)
-        return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+        return setError(EGL_BAD_CONTEXT, (EGLBoolean)EGL_FALSE);
 
     return cnx->egl.eglWaitGL();
 }
@@ -880,7 +1146,7 @@ EGLBoolean eglWaitNative(EGLint engine)
 
     egl_connection_t* const cnx = &gEGLImpl;
     if (!cnx->dso)
-        return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+        return setError(EGL_BAD_CONTEXT, (EGLBoolean)EGL_FALSE);
 
     return cnx->egl.eglWaitNative(engine);
 }
@@ -959,8 +1225,11 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *procname)
          *
          */
 
-        const String8 name(procname);
-        addr = sGLExtentionMap.valueFor(name);
+        const std::string name(procname);
+
+    auto& extentionMap = sGLExtentionMap;
+    auto pos = extentionMap.find(name);
+        addr = (pos != extentionMap.end()) ? pos->second : nullptr;
         const int slot = sGLExtentionSlot;
 
         ALOGE_IF(slot >= MAX_NUMBER_OF_GL_EXTENSIONS,
@@ -982,7 +1251,7 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *procname)
 
             if (found) {
                 addr = gExtensionForwarders[slot];
-                sGLExtentionMap.add(name, addr);
+                extentionMap[name] = addr;
                 sGLExtentionSlot++;
             }
         }
@@ -991,45 +1260,57 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *procname)
     return addr;
 }
 
-class FrameCompletionThread : public Thread {
+class FrameCompletionThread {
 public:
 
     static void queueSync(EGLSyncKHR sync) {
-        static sp<FrameCompletionThread> thread(new FrameCompletionThread);
-        static bool running = false;
-        if (!running) {
-            thread->run("GPUFrameCompletion");
-            running = true;
-        }
-        {
-            Mutex::Autolock lock(thread->mMutex);
-            ScopedTrace st(ATRACE_TAG, String8::format("kicked off frame %d",
-                    thread->mFramesQueued).string());
-            thread->mQueue.push_back(sync);
-            thread->mCondition.signal();
-            thread->mFramesQueued++;
-            ATRACE_INT("GPU Frames Outstanding", thread->mQueue.size());
-        }
+        static FrameCompletionThread thread;
+
+        char name[64];
+
+        std::lock_guard<std::mutex> lock(thread.mMutex);
+        snprintf(name, sizeof(name), "kicked off frame %u", (unsigned int)thread.mFramesQueued);
+        ATRACE_NAME(name);
+
+        thread.mQueue.push_back(sync);
+        thread.mCondition.notify_one();
+        thread.mFramesQueued++;
+        ATRACE_INT("GPU Frames Outstanding", int32_t(thread.mQueue.size()));
     }
 
 private:
-    FrameCompletionThread() : mFramesQueued(0), mFramesCompleted(0) {}
 
-    virtual bool threadLoop() {
+    FrameCompletionThread() : mFramesQueued(0), mFramesCompleted(0) {
+        std::thread thread(&FrameCompletionThread::loop, this);
+        thread.detach();
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
+    void loop() {
+        while (true) {
+            threadLoop();
+        }
+    }
+#pragma clang diagnostic pop
+
+    void threadLoop() {
         EGLSyncKHR sync;
         uint32_t frameNum;
         {
-            Mutex::Autolock lock(mMutex);
-            while (mQueue.isEmpty()) {
-                mCondition.wait(mMutex);
+            std::unique_lock<std::mutex> lock(mMutex);
+            while (mQueue.empty()) {
+                mCondition.wait(lock);
             }
             sync = mQueue[0];
             frameNum = mFramesCompleted;
         }
         EGLDisplay dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
         {
-            ScopedTrace st(ATRACE_TAG, String8::format("waiting for frame %d",
-                    frameNum).string());
+            char name[64];
+            snprintf(name, sizeof(name), "waiting for frame %u", (unsigned int)frameNum);
+            ATRACE_NAME(name);
+
             EGLint result = eglClientWaitSyncKHR(dpy, sync, 0, EGL_FOREVER_KHR);
             if (result == EGL_FALSE) {
                 ALOGE("FrameCompletion: error waiting for fence: %#x", eglGetError());
@@ -1039,19 +1320,18 @@ private:
             eglDestroySyncKHR(dpy, sync);
         }
         {
-            Mutex::Autolock lock(mMutex);
-            mQueue.removeAt(0);
+            std::lock_guard<std::mutex> lock(mMutex);
+            mQueue.pop_front();
             mFramesCompleted++;
-            ATRACE_INT("GPU Frames Outstanding", mQueue.size());
+            ATRACE_INT("GPU Frames Outstanding", int32_t(mQueue.size()));
         }
-        return true;
     }
 
     uint32_t mFramesQueued;
     uint32_t mFramesCompleted;
-    Vector<EGLSyncKHR> mQueue;
-    Condition mCondition;
-    Mutex mMutex;
+    std::deque<EGLSyncKHR> mQueue;
+    std::condition_variable mCondition;
+    std::mutex mMutex;
 };
 
 EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw,
@@ -1065,7 +1345,7 @@ EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw,
 
     SurfaceRef _s(dp.get(), draw);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t const * const s = get_surface(draw);
 
@@ -1090,7 +1370,7 @@ EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw,
         return s->cnx->egl.eglSwapBuffers(dp->disp.dpy, s->surface);
     }
 
-    Vector<android_native_rect_t> androidRects;
+    std::vector<android_native_rect_t> androidRects((size_t)n_rects);
     for (int r = 0; r < n_rects; ++r) {
         int offset = r * 4;
         int x = rects[offset];
@@ -1104,8 +1384,7 @@ EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw,
         androidRect.bottom = y;
         androidRects.push_back(androidRect);
     }
-    native_window_set_surface_damage(s->win.get(), androidRects.array(),
-            androidRects.size());
+    native_window_set_surface_damage(s->getNativeWindow(), androidRects.data(), androidRects.size());
 
     if (s->cnx->egl.eglSwapBuffersWithDamageKHR) {
         return s->cnx->egl.eglSwapBuffersWithDamageKHR(dp->disp.dpy, s->surface,
@@ -1130,7 +1409,7 @@ EGLBoolean eglCopyBuffers(  EGLDisplay dpy, EGLSurface surface,
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t const * const s = get_surface(surface);
     return s->cnx->egl.eglCopyBuffers(dp->disp.dpy, s->surface, target);
@@ -1139,6 +1418,16 @@ EGLBoolean eglCopyBuffers(  EGLDisplay dpy, EGLSurface surface,
 const char* eglQueryString(EGLDisplay dpy, EGLint name)
 {
     clearError();
+
+    // Generate an error quietly when client extensions (as defined by
+    // EGL_EXT_client_extensions) are queried.  We do not want to rely on
+    // validate_display to generate the error as validate_display would log
+    // the error, which can be misleading.
+    //
+    // If we want to support EGL_EXT_client_extensions later, we can return
+    // the client extension string here instead.
+    if (dpy == EGL_NO_DISPLAY && name == EGL_EXTENSIONS)
+        return setErrorQuiet(EGL_BAD_DISPLAY, (const char*)0);
 
     const egl_display_ptr dp = validate_display(dpy);
     if (!dp) return (const char *) NULL;
@@ -1152,11 +1441,13 @@ const char* eglQueryString(EGLDisplay dpy, EGLint name)
             return dp->getExtensionString();
         case EGL_CLIENT_APIS:
             return dp->getClientApiString();
+        default:
+            break;
     }
     return setError(EGL_BAD_PARAMETER, (const char *)0);
 }
 
-EGLAPI const char* eglQueryStringImplementationANDROID(EGLDisplay dpy, EGLint name)
+extern "C" EGLAPI const char* eglQueryStringImplementationANDROID(EGLDisplay dpy, EGLint name)
 {
     clearError();
 
@@ -1172,6 +1463,8 @@ EGLAPI const char* eglQueryStringImplementationANDROID(EGLDisplay dpy, EGLint na
             return dp->disp.queryString.extensions;
         case EGL_CLIENT_APIS:
             return dp->disp.queryString.clientApi;
+        default:
+            break;
     }
     return setError(EGL_BAD_PARAMETER, (const char *)0);
 }
@@ -1190,29 +1483,31 @@ EGLBoolean eglSurfaceAttrib(
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t * const s = get_surface(surface);
 
     if (attribute == EGL_FRONT_BUFFER_AUTO_REFRESH_ANDROID) {
-        int err = native_window_set_auto_refresh(s->win.get(),
-            value ? true : false);
-        return (err == NO_ERROR) ? EGL_TRUE :
+        if (!s->getNativeWindow()) {
             setError(EGL_BAD_SURFACE, EGL_FALSE);
+        }
+        int err = native_window_set_auto_refresh(s->getNativeWindow(), value != 0);
+        return (err == 0) ? EGL_TRUE : setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
     }
 
-#if ENABLE_EGL_ANDROID_GET_FRAME_TIMESTAMPS
     if (attribute == EGL_TIMESTAMPS_ANDROID) {
-        s->enableTimestamps = value;
-        return EGL_TRUE;
+        if (!s->getNativeWindow()) {
+            return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        }
+        int err = native_window_enable_frame_timestamps(s->getNativeWindow(), value != 0);
+        return (err == 0) ? EGL_TRUE : setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
     }
-#endif
 
     if (s->cnx->egl.eglSurfaceAttrib) {
         return s->cnx->egl.eglSurfaceAttrib(
                 dp->disp.dpy, s->surface, attribute, value);
     }
-    return setError(EGL_BAD_SURFACE, EGL_FALSE);
+    return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 }
 
 EGLBoolean eglBindTexImage(
@@ -1225,14 +1520,14 @@ EGLBoolean eglBindTexImage(
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t const * const s = get_surface(surface);
     if (s->cnx->egl.eglBindTexImage) {
         return s->cnx->egl.eglBindTexImage(
                 dp->disp.dpy, s->surface, buffer);
     }
-    return setError(EGL_BAD_SURFACE, EGL_FALSE);
+    return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 }
 
 EGLBoolean eglReleaseTexImage(
@@ -1245,14 +1540,14 @@ EGLBoolean eglReleaseTexImage(
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t const * const s = get_surface(surface);
     if (s->cnx->egl.eglReleaseTexImage) {
         return s->cnx->egl.eglReleaseTexImage(
                 dp->disp.dpy, s->surface, buffer);
     }
-    return setError(EGL_BAD_SURFACE, EGL_FALSE);
+    return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 }
 
 EGLBoolean eglSwapInterval(EGLDisplay dpy, EGLint interval)
@@ -1282,7 +1577,7 @@ EGLBoolean eglWaitClient(void)
 
     egl_connection_t* const cnx = &gEGLImpl;
     if (!cnx->dso)
-        return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+        return setError(EGL_BAD_CONTEXT, (EGLBoolean)EGL_FALSE);
 
     EGLBoolean res;
     if (cnx->egl.eglWaitClient) {
@@ -1298,7 +1593,7 @@ EGLBoolean eglBindAPI(EGLenum api)
     clearError();
 
     if (egl_init_drivers() == EGL_FALSE) {
-        return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+        return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
     }
 
     // bind this API on all EGLs
@@ -1315,7 +1610,7 @@ EGLenum eglQueryAPI(void)
     clearError();
 
     if (egl_init_drivers() == EGL_FALSE) {
-        return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+        return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
     }
 
     egl_connection_t* const cnx = &gEGLImpl;
@@ -1373,14 +1668,14 @@ EGLBoolean eglLockSurfaceKHR(EGLDisplay dpy, EGLSurface surface,
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t const * const s = get_surface(surface);
     if (s->cnx->egl.eglLockSurfaceKHR) {
         return s->cnx->egl.eglLockSurfaceKHR(
                 dp->disp.dpy, s->surface, attrib_list);
     }
-    return setError(EGL_BAD_DISPLAY, EGL_FALSE);
+    return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
 }
 
 EGLBoolean eglUnlockSurfaceKHR(EGLDisplay dpy, EGLSurface surface)
@@ -1392,13 +1687,13 @@ EGLBoolean eglUnlockSurfaceKHR(EGLDisplay dpy, EGLSurface surface)
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get())
-        return setError(EGL_BAD_SURFACE, EGL_FALSE);
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
 
     egl_surface_t const * const s = get_surface(surface);
     if (s->cnx->egl.eglUnlockSurfaceKHR) {
         return s->cnx->egl.eglUnlockSurfaceKHR(dp->disp.dpy, s->surface);
     }
-    return setError(EGL_BAD_DISPLAY, EGL_FALSE);
+    return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
 }
 
 EGLImageKHR eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target,
@@ -1496,7 +1791,7 @@ EGLint eglClientWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync,
     const egl_display_ptr dp = validate_display(dpy);
     if (!dp) return EGL_FALSE;
 
-    EGLBoolean result = EGL_FALSE;
+    EGLint result = EGL_FALSE;
     egl_connection_t* const cnx = &gEGLImpl;
     if (cnx->dso && cnx->egl.eglClientWaitSyncKHR) {
         result = cnx->egl.eglClientWaitSyncKHR(
@@ -1630,13 +1925,22 @@ EGLSurface eglCreateStreamProducerSurfaceKHR(EGLDisplay dpy, EGLConfig config,
     egl_display_ptr dp = validate_display(dpy);
     if (!dp) return EGL_NO_SURFACE;
 
+    EGLint colorSpace = EGL_GL_COLORSPACE_LINEAR_KHR;
+    android_dataspace dataSpace = HAL_DATASPACE_UNKNOWN;
+    // TODO: Probably need to update EGL_KHR_stream_producer_eglsurface to
+    // indicate support for EGL_GL_COLORSPACE_KHR.
+    // now select a corresponding sRGB format if needed
+    if (!getColorSpaceAttribute(dp, attrib_list, colorSpace, dataSpace)) {
+        ALOGE("error invalid colorspace: %d", colorSpace);
+        return setError(EGL_BAD_ATTRIBUTE, EGL_NO_SURFACE);
+    }
+
     egl_connection_t* const cnx = &gEGLImpl;
     if (cnx->dso && cnx->egl.eglCreateStreamProducerSurfaceKHR) {
         EGLSurface surface = cnx->egl.eglCreateStreamProducerSurfaceKHR(
                 dp->disp.dpy, config, stream, attrib_list);
         if (surface != EGL_NO_SURFACE) {
-            egl_surface_t* s = new egl_surface_t(dp.get(), config, NULL,
-                    surface, cnx);
+            egl_surface_t* s = new egl_surface_t(dp.get(), config, NULL, surface, colorSpace, cnx);
             return s;
         }
     }
@@ -1780,149 +2084,22 @@ EGLBoolean eglPresentationTimeANDROID(EGLDisplay dpy, EGLSurface surface,
     }
 
     egl_surface_t const * const s = get_surface(surface);
-    native_window_set_buffers_timestamp(s->win.get(), time);
+    native_window_set_buffers_timestamp(s->getNativeWindow(), time);
 
     return EGL_TRUE;
 }
 
-EGLClientBuffer eglCreateNativeClientBufferANDROID(const EGLint *attrib_list)
-{
+EGLClientBuffer eglGetNativeClientBufferANDROID(const AHardwareBuffer *buffer) {
     clearError();
-
-    int usage = 0;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint32_t format = 0;
-    uint32_t red_size = 0;
-    uint32_t green_size = 0;
-    uint32_t blue_size = 0;
-    uint32_t alpha_size = 0;
-
-#define GET_NONNEGATIVE_VALUE(case_name, target) \
-    case case_name: \
-        if (value >= 0) { \
-            target = value; \
-        } else { \
-            return setError(EGL_BAD_PARAMETER, (EGLClientBuffer)0); \
-        } \
-        break
-
-    if (attrib_list) {
-        while (*attrib_list != EGL_NONE) {
-            GLint attr = *attrib_list++;
-            GLint value = *attrib_list++;
-            switch (attr) {
-                GET_NONNEGATIVE_VALUE(EGL_WIDTH, width);
-                GET_NONNEGATIVE_VALUE(EGL_HEIGHT, height);
-                GET_NONNEGATIVE_VALUE(EGL_RED_SIZE, red_size);
-                GET_NONNEGATIVE_VALUE(EGL_GREEN_SIZE, green_size);
-                GET_NONNEGATIVE_VALUE(EGL_BLUE_SIZE, blue_size);
-                GET_NONNEGATIVE_VALUE(EGL_ALPHA_SIZE, alpha_size);
-                case EGL_NATIVE_BUFFER_USAGE_ANDROID:
-                    if (value & EGL_NATIVE_BUFFER_USAGE_PROTECTED_BIT_ANDROID) {
-                        usage |= GRALLOC_USAGE_PROTECTED;
-                    }
-                    if (value & EGL_NATIVE_BUFFER_USAGE_RENDERBUFFER_BIT_ANDROID) {
-                        usage |= GRALLOC_USAGE_HW_RENDER;
-                    }
-                    if (value & EGL_NATIVE_BUFFER_USAGE_TEXTURE_BIT_ANDROID) {
-                        usage |= GRALLOC_USAGE_HW_TEXTURE;
-                    }
-                    break;
-                default:
-                    return setError(EGL_BAD_PARAMETER, (EGLClientBuffer)0);
-            }
-        }
-    }
-#undef GET_NONNEGATIVE_VALUE
-
-    // Validate format.
-    if (red_size == 8 && green_size == 8 && blue_size == 8) {
-        if (alpha_size == 8) {
-            format = HAL_PIXEL_FORMAT_RGBA_8888;
-        } else {
-            format = HAL_PIXEL_FORMAT_RGB_888;
-        }
-    } else if (red_size == 5 && green_size == 6 && blue_size == 5 &&
-               alpha_size == 0) {
-        format = HAL_PIXEL_FORMAT_RGB_565;
-    } else {
-        ALOGE("Invalid native pixel format { r=%d, g=%d, b=%d, a=%d }",
-                red_size, green_size, blue_size, alpha_size);
-        return setError(EGL_BAD_PARAMETER, (EGLClientBuffer)0);
-    }
-
-#define CHECK_ERROR_CONDITION(message) \
-    if (err != NO_ERROR) { \
-        ALOGE(message); \
-        goto error_condition; \
-    }
-
-    // The holder is used to destroy the buffer if an error occurs.
-    GraphicBuffer* gBuffer = new GraphicBuffer();
-    sp<IServiceManager> sm = defaultServiceManager();
-    sp<IBinder> surfaceFlinger = sm->getService(String16("SurfaceFlinger"));
-    sp<IBinder> allocator;
-    Parcel sc_data, sc_reply, data, reply;
-    status_t err = NO_ERROR;
-    if (sm == NULL) {
-        ALOGE("Unable to connect to ServiceManager");
-        goto error_condition;
-    }
-
-    // Obtain an allocator.
-    if (surfaceFlinger == NULL) {
-        ALOGE("Unable to connect to SurfaceFlinger");
-        goto error_condition;
-    }
-    sc_data.writeInterfaceToken(String16("android.ui.ISurfaceComposer"));
-    err = surfaceFlinger->transact(
-            BnSurfaceComposer::CREATE_GRAPHIC_BUFFER_ALLOC, sc_data, &sc_reply);
-    CHECK_ERROR_CONDITION("Unable to obtain allocator from SurfaceFlinger");
-    allocator = sc_reply.readStrongBinder();
-
-    if (allocator == NULL) {
-        ALOGE("Unable to obtain an ISurfaceComposer");
-        goto error_condition;
-    }
-    data.writeInterfaceToken(String16("android.ui.IGraphicBufferAlloc"));
-    err = data.writeUint32(width);
-    CHECK_ERROR_CONDITION("Unable to write width");
-    err = data.writeUint32(height);
-    CHECK_ERROR_CONDITION("Unable to write height");
-    err = data.writeInt32(static_cast<int32_t>(format));
-    CHECK_ERROR_CONDITION("Unable to write format");
-    err = data.writeUint32(usage);
-    CHECK_ERROR_CONDITION("Unable to write usage");
-    err = data.writeUtf8AsUtf16(
-            std::string("[eglCreateNativeClientBufferANDROID pid ") +
-            std::to_string(getpid()) + ']');
-    CHECK_ERROR_CONDITION("Unable to write requestor name");
-    err = allocator->transact(IBinder::FIRST_CALL_TRANSACTION, data,
-            &reply);
-    CHECK_ERROR_CONDITION(
-            "Unable to request buffer allocation from surface composer");
-    err = reply.readInt32();
-    CHECK_ERROR_CONDITION("Unable to obtain buffer from surface composer");
-    err = reply.read(*gBuffer);
-    CHECK_ERROR_CONDITION("Unable to read buffer from surface composer");
-
-    err = gBuffer->initCheck();
-    if (err != NO_ERROR) {
-        ALOGE("Unable to create native buffer { w=%d, h=%d, f=%d, u=%#x }: %#x",
-                width, height, format, usage, err);
-        goto error_condition;
-    }
-    ALOGD("Created new native buffer %p { w=%d, h=%d, f=%d, u=%#x }",
-            gBuffer, width, height, format, usage);
-    return static_cast<EGLClientBuffer>(gBuffer->getNativeBuffer());
-
-#undef CHECK_ERROR_CONDITION
-
-error_condition:
-    // Delete the buffer.
-    sp<GraphicBuffer> holder(gBuffer);
-    return setError(EGL_BAD_ALLOC, (EGLClientBuffer)0);
+    // AHardwareBuffer_to_ANativeWindowBuffer is a platform-only symbol and thus
+    // this function cannot be implemented when this libEGL is built for
+    // vendors.
+#ifndef __ANDROID_VNDK__
+    if (!buffer) return setError(EGL_BAD_PARAMETER, (EGLClientBuffer)0);
+    return const_cast<ANativeWindowBuffer *>(AHardwareBuffer_to_ANativeWindowBuffer(buffer));
+#else
+    return setError(EGL_BAD_PARAMETER, (EGLClientBuffer)0);
+#endif
 }
 
 // ----------------------------------------------------------------------------
@@ -1933,7 +2110,7 @@ EGLuint64NV eglGetSystemTimeFrequencyNV()
     clearError();
 
     if (egl_init_drivers() == EGL_FALSE) {
-        return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+        return setError(EGL_BAD_PARAMETER, (EGLuint64NV)EGL_FALSE);
     }
 
     EGLuint64NV ret = 0;
@@ -1943,7 +2120,7 @@ EGLuint64NV eglGetSystemTimeFrequencyNV()
         return cnx->egl.eglGetSystemTimeFrequencyNV();
     }
 
-    return setErrorQuiet(EGL_BAD_DISPLAY, 0);
+    return setErrorQuiet(EGL_BAD_DISPLAY, (EGLuint64NV)0);
 }
 
 EGLuint64NV eglGetSystemTimeNV()
@@ -1951,7 +2128,7 @@ EGLuint64NV eglGetSystemTimeNV()
     clearError();
 
     if (egl_init_drivers() == EGL_FALSE) {
-        return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+        return setError(EGL_BAD_PARAMETER, (EGLuint64NV)EGL_FALSE);
     }
 
     EGLuint64NV ret = 0;
@@ -1961,7 +2138,7 @@ EGLuint64NV eglGetSystemTimeNV()
         return cnx->egl.eglGetSystemTimeNV();
     }
 
-    return setErrorQuiet(EGL_BAD_DISPLAY, 0);
+    return setErrorQuiet(EGL_BAD_DISPLAY, (EGLuint64NV)0);
 }
 
 // ----------------------------------------------------------------------------
@@ -1993,103 +2170,258 @@ EGLBoolean eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface,
     return EGL_FALSE;
 }
 
+EGLBoolean eglGetNextFrameIdANDROID(EGLDisplay dpy, EGLSurface surface,
+            EGLuint64KHR *frameId) {
+    clearError();
+
+    const egl_display_ptr dp = validate_display(dpy);
+    if (!dp) {
+        return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
+    }
+
+    SurfaceRef _s(dp.get(), surface);
+    if (!_s.get()) {
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+    }
+
+    egl_surface_t const * const s = get_surface(surface);
+
+    if (!s->getNativeWindow()) {
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+    }
+
+    uint64_t nextFrameId = 0;
+    int ret = native_window_get_next_frame_id(s->getNativeWindow(), &nextFrameId);
+
+    if (ret != 0) {
+        // This should not happen. Return an error that is not in the spec
+        // so it's obvious something is very wrong.
+        ALOGE("eglGetNextFrameId: Unexpected error.");
+        return setError(EGL_NOT_INITIALIZED, (EGLBoolean)EGL_FALSE);
+    }
+
+    *frameId = nextFrameId;
+    return EGL_TRUE;
+}
+
+EGLBoolean eglGetCompositorTimingANDROID(EGLDisplay dpy, EGLSurface surface,
+        EGLint numTimestamps, const EGLint *names, EGLnsecsANDROID *values)
+{
+    clearError();
+
+    const egl_display_ptr dp = validate_display(dpy);
+    if (!dp) {
+        return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
+    }
+
+    SurfaceRef _s(dp.get(), surface);
+    if (!_s.get()) {
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+    }
+
+    egl_surface_t const * const s = get_surface(surface);
+
+    if (!s->getNativeWindow()) {
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+    }
+
+    nsecs_t* compositeDeadline = nullptr;
+    nsecs_t* compositeInterval = nullptr;
+    nsecs_t* compositeToPresentLatency = nullptr;
+
+    for (int i = 0; i < numTimestamps; i++) {
+        switch (names[i]) {
+            case EGL_COMPOSITE_DEADLINE_ANDROID:
+                compositeDeadline = &values[i];
+                break;
+            case EGL_COMPOSITE_INTERVAL_ANDROID:
+                compositeInterval = &values[i];
+                break;
+            case EGL_COMPOSITE_TO_PRESENT_LATENCY_ANDROID:
+                compositeToPresentLatency = &values[i];
+                break;
+            default:
+                return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
+        }
+    }
+
+    int ret = native_window_get_compositor_timing(s->getNativeWindow(),
+            compositeDeadline, compositeInterval, compositeToPresentLatency);
+
+    switch (ret) {
+      case 0:
+        return EGL_TRUE;
+      case -ENOSYS:
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+      default:
+        // This should not happen. Return an error that is not in the spec
+        // so it's obvious something is very wrong.
+        ALOGE("eglGetCompositorTiming: Unexpected error.");
+        return setError(EGL_NOT_INITIALIZED, (EGLBoolean)EGL_FALSE);
+    }
+}
+
+EGLBoolean eglGetCompositorTimingSupportedANDROID(
+        EGLDisplay dpy, EGLSurface surface, EGLint name)
+{
+    clearError();
+
+    const egl_display_ptr dp = validate_display(dpy);
+    if (!dp) {
+        return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
+    }
+
+    SurfaceRef _s(dp.get(), surface);
+    if (!_s.get()) {
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+    }
+
+    egl_surface_t const * const s = get_surface(surface);
+
+    ANativeWindow* window = s->getNativeWindow();
+    if (!window) {
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+    }
+
+    switch (name) {
+        case EGL_COMPOSITE_DEADLINE_ANDROID:
+        case EGL_COMPOSITE_INTERVAL_ANDROID:
+        case EGL_COMPOSITE_TO_PRESENT_LATENCY_ANDROID:
+            return EGL_TRUE;
+        default:
+            return EGL_FALSE;
+    }
+}
+
 EGLBoolean eglGetFrameTimestampsANDROID(EGLDisplay dpy, EGLSurface surface,
-        EGLint framesAgo, EGLint numTimestamps, const EGLint *timestamps,
+        EGLuint64KHR frameId, EGLint numTimestamps, const EGLint *timestamps,
         EGLnsecsANDROID *values)
 {
     clearError();
 
     const egl_display_ptr dp = validate_display(dpy);
     if (!dp) {
-        setError(EGL_BAD_DISPLAY, EGL_FALSE);
-        return EGL_FALSE;
+        return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
     }
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get()) {
-        setError(EGL_BAD_SURFACE, EGL_FALSE);
-        return EGL_FALSE;
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
     }
 
     egl_surface_t const * const s = get_surface(surface);
 
-    if (!s->enableTimestamps) {
-        setError(EGL_BAD_SURFACE, EGL_FALSE);
-        return EGL_FALSE;
+    if (!s->getNativeWindow()) {
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
     }
 
-    nsecs_t* postedTime = nullptr;
+    nsecs_t* requestedPresentTime = nullptr;
     nsecs_t* acquireTime = nullptr;
-    nsecs_t* refreshStartTime = nullptr;
-    nsecs_t* GLCompositionDoneTime = nullptr;
-    nsecs_t* displayRetireTime = nullptr;
+    nsecs_t* latchTime = nullptr;
+    nsecs_t* firstRefreshStartTime = nullptr;
+    nsecs_t* gpuCompositionDoneTime = nullptr;
+    nsecs_t* lastRefreshStartTime = nullptr;
+    nsecs_t* displayPresentTime = nullptr;
+    nsecs_t* dequeueReadyTime = nullptr;
     nsecs_t* releaseTime = nullptr;
 
     for (int i = 0; i < numTimestamps; i++) {
         switch (timestamps[i]) {
-            case EGL_QUEUE_TIME_ANDROID:
-                postedTime = &values[i];
+            case EGL_REQUESTED_PRESENT_TIME_ANDROID:
+                requestedPresentTime = &values[i];
                 break;
             case EGL_RENDERING_COMPLETE_TIME_ANDROID:
                 acquireTime = &values[i];
                 break;
-            case EGL_COMPOSITION_START_TIME_ANDROID:
-                refreshStartTime = &values[i];
+            case EGL_COMPOSITION_LATCH_TIME_ANDROID:
+                latchTime = &values[i];
                 break;
-            case EGL_COMPOSITION_FINISHED_TIME_ANDROID:
-                GLCompositionDoneTime = &values[i];
+            case EGL_FIRST_COMPOSITION_START_TIME_ANDROID:
+                firstRefreshStartTime = &values[i];
                 break;
-            case EGL_DISPLAY_RETIRE_TIME_ANDROID:
-                displayRetireTime = &values[i];
+            case EGL_LAST_COMPOSITION_START_TIME_ANDROID:
+                lastRefreshStartTime = &values[i];
+                break;
+            case EGL_FIRST_COMPOSITION_GPU_FINISHED_TIME_ANDROID:
+                gpuCompositionDoneTime = &values[i];
+                break;
+            case EGL_DISPLAY_PRESENT_TIME_ANDROID:
+                displayPresentTime = &values[i];
+                break;
+            case EGL_DEQUEUE_READY_TIME_ANDROID:
+                dequeueReadyTime = &values[i];
                 break;
             case EGL_READS_DONE_TIME_ANDROID:
                 releaseTime = &values[i];
                 break;
             default:
-                setError(EGL_BAD_PARAMETER, EGL_FALSE);
-                return EGL_FALSE;
+                return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
         }
     }
 
-    status_t ret = native_window_get_frame_timestamps(s->win.get(), framesAgo,
-            postedTime, acquireTime, refreshStartTime, GLCompositionDoneTime,
-            displayRetireTime, releaseTime);
+    int ret = native_window_get_frame_timestamps(s->getNativeWindow(), frameId,
+            requestedPresentTime, acquireTime, latchTime, firstRefreshStartTime,
+            lastRefreshStartTime, gpuCompositionDoneTime, displayPresentTime,
+            dequeueReadyTime, releaseTime);
 
-    if (ret != NO_ERROR) {
-        setError(EGL_BAD_ACCESS, EGL_FALSE);
-        return EGL_FALSE;
+    switch (ret) {
+        case 0:
+            return EGL_TRUE;
+        case -ENOENT:
+            return setError(EGL_BAD_ACCESS, (EGLBoolean)EGL_FALSE);
+        case -ENOSYS:
+            return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        case -EINVAL:
+            return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
+        default:
+            // This should not happen. Return an error that is not in the spec
+            // so it's obvious something is very wrong.
+            ALOGE("eglGetFrameTimestamps: Unexpected error.");
+            return setError(EGL_NOT_INITIALIZED, (EGLBoolean)EGL_FALSE);
     }
-
-    return EGL_TRUE;
 }
 
-EGLBoolean eglQueryTimestampSupportedANDROID(EGLDisplay dpy, EGLSurface surface,
-        EGLint timestamp)
+EGLBoolean eglGetFrameTimestampSupportedANDROID(
+        EGLDisplay dpy, EGLSurface surface, EGLint timestamp)
 {
     clearError();
 
     const egl_display_ptr dp = validate_display(dpy);
     if (!dp) {
-        setError(EGL_BAD_DISPLAY, EGL_FALSE);
-        return EGL_FALSE;
+        return setError(EGL_BAD_DISPLAY, (EGLBoolean)EGL_FALSE);
     }
 
     SurfaceRef _s(dp.get(), surface);
     if (!_s.get()) {
-        setError(EGL_BAD_SURFACE, EGL_FALSE);
-        return EGL_FALSE;
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+    }
+
+    egl_surface_t const * const s = get_surface(surface);
+
+    ANativeWindow* window = s->getNativeWindow();
+    if (!window) {
+        return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
     }
 
     switch (timestamp) {
-#if ENABLE_EGL_ANDROID_GET_FRAME_TIMESTAMPS
-        case EGL_QUEUE_TIME_ANDROID:
+        case EGL_COMPOSITE_DEADLINE_ANDROID:
+        case EGL_COMPOSITE_INTERVAL_ANDROID:
+        case EGL_COMPOSITE_TO_PRESENT_LATENCY_ANDROID:
+        case EGL_REQUESTED_PRESENT_TIME_ANDROID:
         case EGL_RENDERING_COMPLETE_TIME_ANDROID:
-        case EGL_COMPOSITION_START_TIME_ANDROID:
-        case EGL_COMPOSITION_FINISHED_TIME_ANDROID:
-        case EGL_DISPLAY_RETIRE_TIME_ANDROID:
+        case EGL_COMPOSITION_LATCH_TIME_ANDROID:
+        case EGL_FIRST_COMPOSITION_START_TIME_ANDROID:
+        case EGL_LAST_COMPOSITION_START_TIME_ANDROID:
+        case EGL_FIRST_COMPOSITION_GPU_FINISHED_TIME_ANDROID:
+        case EGL_DEQUEUE_READY_TIME_ANDROID:
         case EGL_READS_DONE_TIME_ANDROID:
             return EGL_TRUE;
-#endif
+        case EGL_DISPLAY_PRESENT_TIME_ANDROID: {
+            int value = 0;
+            window->query(window,
+                    NATIVE_WINDOW_FRAME_TIMESTAMPS_SUPPORTS_PRESENT, &value);
+            return value == 0 ? EGL_FALSE : EGL_TRUE;
+        }
         default:
             return EGL_FALSE;
     }

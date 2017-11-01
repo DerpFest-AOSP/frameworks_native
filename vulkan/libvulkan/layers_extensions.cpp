@@ -69,7 +69,7 @@ const char kSystemLayerLibraryDir[] = "/data/local/debug/vulkan";
 
 class LayerLibrary {
    public:
-    LayerLibrary(const std::string& path)
+    explicit LayerLibrary(const std::string& path)
         : path_(path), dlhandle_(nullptr), refcount_(0) {}
 
     LayerLibrary(LayerLibrary&& other)

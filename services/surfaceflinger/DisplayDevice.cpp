@@ -47,6 +47,9 @@
 #include "SurfaceFlinger.h"
 #include "Layer.h"
 
+#include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
+#include <configstore/Utils.h>
+
 // ----------------------------------------------------------------------------
 using namespace android;
 // ----------------------------------------------------------------------------
@@ -56,6 +59,13 @@ static constexpr bool kEGLAndroidSwapRectangle = true;
 #else
 static constexpr bool kEGLAndroidSwapRectangle = false;
 #endif
+
+// retrieve triple buffer setting from configstore
+using namespace android::hardware::configstore;
+using namespace android::hardware::configstore::V1_0;
+
+static bool useTripleFramebuffer = getInt64< ISurfaceFlingerConfigs,
+        &ISurfaceFlingerConfigs::maxFrameBufferAcquiredBuffers>(2) == 3;
 
 #if !defined(EGL_EGLEXT_PROTOTYPES) || !defined(EGL_ANDROID_swap_rectangle)
 // Dummy implementation in case it is missing.
@@ -70,6 +80,7 @@ inline void eglSetSwapRectangleANDROID (EGLDisplay, EGLSurface, EGLint, EGLint, 
 
 uint32_t DisplayDevice::sPrimaryDisplayOrientation = 0;
 
+// clang-format off
 DisplayDevice::DisplayDevice(
         const sp<SurfaceFlinger>& flinger,
         DisplayType type,
@@ -81,7 +92,8 @@ DisplayDevice::DisplayDevice(
         const wp<IBinder>& displayToken,
         const sp<DisplaySurface>& displaySurface,
         const sp<IGraphicBufferProducer>& producer,
-        EGLConfig config)
+        EGLConfig config,
+        bool supportWideColor)
     : lastCompositionHadVisibleLayers(false),
       mFlinger(flinger),
       mType(type),
@@ -103,10 +115,17 @@ DisplayDevice::DisplayDevice(
       mPowerMode(HWC_POWER_MODE_OFF),
       mActiveConfig(0)
 {
+    // clang-format on
     Surface* surface;
     mNativeWindow = surface = new Surface(producer, false);
     ANativeWindow* const window = mNativeWindow.get();
 
+#ifdef USE_HWC2
+    mActiveColorMode = HAL_COLOR_MODE_NATIVE;
+    mDisplayHasWideColor = supportWideColor;
+#else
+    (void) supportWideColor;
+#endif
     /*
      * Create our display's surface
      */
@@ -165,9 +184,9 @@ DisplayDevice::DisplayDevice(
     // initialize the display orientation transform.
     setProjection(DisplayState::eOrientationDefault, mViewport, mFrame);
 
-#ifdef NUM_FRAMEBUFFER_SURFACE_BUFFERS
-    surface->allocateBuffers();
-#endif
+    if (useTripleFramebuffer) {
+        surface->allocateBuffers();
+    }
 }
 
 DisplayDevice::~DisplayDevice() {
@@ -423,6 +442,11 @@ void DisplayDevice::setActiveColorMode(android_color_mode_t mode) {
 android_color_mode_t DisplayDevice::getActiveColorMode() const {
     return mActiveColorMode;
 }
+
+void DisplayDevice::setCompositionDataSpace(android_dataspace dataspace) {
+    ANativeWindow* const window = mNativeWindow.get();
+    native_window_set_buffers_data_space(window, dataspace);
+}
 #endif
 
 // ----------------------------------------------------------------------------
@@ -591,25 +615,41 @@ uint32_t DisplayDevice::getPrimaryDisplayOrientationTransform() {
 
 void DisplayDevice::dump(String8& result) const {
     const Transform& tr(mGlobalTransform);
-    result.appendFormat(
-        "+ DisplayDevice: %s\n"
-        "   type=%x, hwcId=%d, layerStack=%u, (%4dx%4d), ANativeWindow=%p, orient=%2d (type=%08x), "
-        "flips=%u, isSecure=%d, powerMode=%d, activeConfig=%d, numLayers=%zu\n"
-        "   v:[%d,%d,%d,%d], f:[%d,%d,%d,%d], s:[%d,%d,%d,%d],"
-        "transform:[[%0.3f,%0.3f,%0.3f][%0.3f,%0.3f,%0.3f][%0.3f,%0.3f,%0.3f]]\n",
-        mDisplayName.string(), mType, mHwcDisplayId,
-        mLayerStack, mDisplayWidth, mDisplayHeight, mNativeWindow.get(),
-        mOrientation, tr.getType(), getPageFlipCount(),
-        mIsSecure, mPowerMode, mActiveConfig,
-        mVisibleLayersSortedByZ.size(),
-        mViewport.left, mViewport.top, mViewport.right, mViewport.bottom,
-        mFrame.left, mFrame.top, mFrame.right, mFrame.bottom,
-        mScissor.left, mScissor.top, mScissor.right, mScissor.bottom,
-        tr[0][0], tr[1][0], tr[2][0],
-        tr[0][1], tr[1][1], tr[2][1],
-        tr[0][2], tr[1][2], tr[2][2]);
+    EGLint redSize, greenSize, blueSize, alphaSize;
+    eglGetConfigAttrib(mDisplay, mConfig, EGL_RED_SIZE, &redSize);
+    eglGetConfigAttrib(mDisplay, mConfig, EGL_GREEN_SIZE, &greenSize);
+    eglGetConfigAttrib(mDisplay, mConfig, EGL_BLUE_SIZE, &blueSize);
+    eglGetConfigAttrib(mDisplay, mConfig, EGL_ALPHA_SIZE, &alphaSize);
+    result.appendFormat("+ DisplayDevice: %s\n", mDisplayName.string());
+    result.appendFormat("   type=%x, hwcId=%d, layerStack=%u, (%4dx%4d), ANativeWindow=%p "
+                        "(%d:%d:%d:%d), orient=%2d (type=%08x), "
+                        "flips=%u, isSecure=%d, powerMode=%d, activeConfig=%d, numLayers=%zu\n",
+                        mType, mHwcDisplayId, mLayerStack, mDisplayWidth, mDisplayHeight,
+                        mNativeWindow.get(), redSize, greenSize, blueSize, alphaSize, mOrientation,
+                        tr.getType(), getPageFlipCount(), mIsSecure, mPowerMode, mActiveConfig,
+                        mVisibleLayersSortedByZ.size());
+    result.appendFormat("   v:[%d,%d,%d,%d], f:[%d,%d,%d,%d], s:[%d,%d,%d,%d],"
+                        "transform:[[%0.3f,%0.3f,%0.3f][%0.3f,%0.3f,%0.3f][%0.3f,%0.3f,%0.3f]]\n",
+                        mViewport.left, mViewport.top, mViewport.right, mViewport.bottom,
+                        mFrame.left, mFrame.top, mFrame.right, mFrame.bottom, mScissor.left,
+                        mScissor.top, mScissor.right, mScissor.bottom, tr[0][0], tr[1][0], tr[2][0],
+                        tr[0][1], tr[1][1], tr[2][1], tr[0][2], tr[1][2], tr[2][2]);
 
     String8 surfaceDump;
     mDisplaySurface->dumpAsString(surfaceDump);
     result.append(surfaceDump);
+}
+
+std::atomic<int32_t> DisplayDeviceState::nextDisplayId(1);
+
+DisplayDeviceState::DisplayDeviceState(DisplayDevice::DisplayType type, bool isSecure)
+    : type(type),
+      layerStack(DisplayDevice::NO_LAYER_STACK),
+      orientation(0),
+      width(0),
+      height(0),
+      isSecure(isSecure)
+{
+    viewport.makeInvalid();
+    frame.makeInvalid();
 }

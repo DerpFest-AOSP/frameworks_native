@@ -14,11 +14,18 @@
 
 cc_library_shared {
     name: "libui",
+    vendor_available: true,
+    vndk: {
+        enabled: true,
+    },
 
     clang: true,
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
     cppflags: [
         "-Weverything",
-        "-Werror",
 
         // The static constructors and destructors in this library have not been noted to
         // introduce significant overheads
@@ -27,6 +34,9 @@ cc_library_shared {
 
         // We only care about compiling as C++14
         "-Wno-c++98-compat-pedantic",
+
+        // We are aware of the risks inherent in comparing floats for equality
+        "-Wno-float-equal",
 
         // We use four-character constants for the GraphicBuffer header, and don't care
         // that they're non-portable as long as they're consistent within one execution
@@ -41,10 +51,12 @@ cc_library_shared {
     },
 
     srcs: [
+        "ColorSpace.cpp",
+        "DebugUtils.cpp",
         "Fence.cpp",
+        "FenceTime.cpp",
         "FrameStats.cpp",
-        "Gralloc1.cpp",
-        "Gralloc1On0Adapter.cpp",
+        "Gralloc2.cpp",
         "GraphicBuffer.cpp",
         "GraphicBufferAllocator.cpp",
         "GraphicBufferMapper.cpp",
@@ -55,14 +67,51 @@ cc_library_shared {
         "UiConfig.cpp",
     ],
 
+    include_dirs: [
+        "frameworks/native/include",
+    ],
+
     shared_libs: [
-        "libbinder",
+        "android.hardware.graphics.allocator@2.0",
+        "android.hardware.graphics.mapper@2.0",
+        "android.hardware.configstore@1.0",
+        "android.hardware.configstore-utils",
+        "libbase",
         "libcutils",
         "libhardware",
+        "libhidlbase",
+        "libhidltransport",
+        "libhwbinder",
         "libsync",
         "libutils",
         "liblog",
     ],
+
+    static_libs: [
+        "libarect",
+        "libgrallocusage",
+        "libmath",
+    ],
+
+    header_libs: [
+        "libnativebase_headers",
+        "libhardware_headers",
+    ],
+
+    export_include_dirs: ["include"],
+
+    export_static_lib_headers: [
+        "libarect",
+        "libmath",
+    ],
+
+    export_header_lib_headers: [
+        "libnativebase_headers",
+        "libhardware_headers",
+    ],
 }
 
-subdirs = ["tests"]
+subdirs = [
+    "tests",
+    "tools",
+]

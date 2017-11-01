@@ -17,8 +17,11 @@
 #ifndef ANDROID_UI_PRIVATE_REGION_HELPER_H
 #define ANDROID_UI_PRIVATE_REGION_HELPER_H
 
+#include <limits>
 #include <stdint.h>
 #include <sys/types.h>
+
+#include <limits>
 
 namespace android {
 // ----------------------------------------------------------------------------
@@ -27,10 +30,10 @@ template<typename RECT>
 class region_operator
 {
 public:
-    typedef typename RECT::value_type TYPE;    
-    static const TYPE max_value = 0x7FFFFFF;
+    typedef typename RECT::value_type TYPE;
+    static const TYPE max_value = std::numeric_limits<TYPE>::max();
 
-    /* 
+    /*
      * Common boolean operations:
      * value is computed as 0b101 op 0b110
      *    other boolean operation are possible, simply compute
@@ -78,7 +81,6 @@ public:
             int inside = spanner.next(current.top, current.bottom);
             spannerInner.prepare(inside);
             do {
-                TYPE left, right;
                 int inner_inside = spannerInner.next(current.left, current.right);
                 if ((op_mask >> inner_inside) & 1) {
                     if (current.left < current.right && 

@@ -42,7 +42,7 @@ TEST_F(SurfaceTextureGLTest, TexturingFromCpuFilledYV12BufferNpot) {
             &anb));
     ASSERT_TRUE(anb != NULL);
 
-    sp<GraphicBuffer> buf(new GraphicBuffer(anb, false));
+    sp<GraphicBuffer> buf(GraphicBuffer::from(anb));
 
     // Fill the buffer with the a checkerboard pattern
     uint8_t* img = NULL;
@@ -92,7 +92,7 @@ TEST_F(SurfaceTextureGLTest, TexturingFromCpuFilledYV12BufferPow2) {
             &anb));
     ASSERT_TRUE(anb != NULL);
 
-    sp<GraphicBuffer> buf(new GraphicBuffer(anb, false));
+    sp<GraphicBuffer> buf(GraphicBuffer::from(anb));
 
     // Fill the buffer with the a checkerboard pattern
     uint8_t* img = NULL;
@@ -157,7 +157,7 @@ TEST_F(SurfaceTextureGLTest, TexturingFromCpuFilledYV12BufferWithCrop) {
                 &anb));
         ASSERT_TRUE(anb != NULL);
 
-        sp<GraphicBuffer> buf(new GraphicBuffer(anb, false));
+        sp<GraphicBuffer> buf(GraphicBuffer::from(anb));
 
         uint8_t* img = NULL;
         buf->lock(GRALLOC_USAGE_SW_WRITE_OFTEN, (void**)(&img));
@@ -238,7 +238,7 @@ TEST_F(SurfaceTextureGLTest, TexturingFromCpuFilledYV12BuffersRepeatedly) {
                     return false;
                 }
 
-                sp<GraphicBuffer> buf(new GraphicBuffer(anb, false));
+                sp<GraphicBuffer> buf(GraphicBuffer::from(anb));
 
                 const int yuvTexOffsetY = 0;
                 int stride = buf->getStride();
@@ -323,7 +323,6 @@ TEST_F(SurfaceTextureGLTest, TexturingFromCpuFilledYV12BuffersRepeatedly) {
         for (int j = 0; j < numTestPixels; j++) {
             int x = testPixels[j].x;
             int y = testPixels[j].y;
-            uint8_t value = 0;
             if (j == (i % numTestPixels)) {
                 // We must y-invert the texture coords
                 EXPECT_TRUE(checkPixel(x, texHeight-y-1, 255, 255, 255, 255));

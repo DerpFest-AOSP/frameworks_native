@@ -17,6 +17,8 @@
 #ifndef DEXOPT_H_
 #define DEXOPT_H_
 
+#include "installd_constants.h"
+
 #include <sys/types.h>
 
 #include <cutils/multiuser.h>
@@ -25,34 +27,55 @@ namespace android {
 namespace installd {
 
 /* dexopt needed flags matching those in dalvik.system.DexFile */
+static constexpr int NO_DEXOPT_NEEDED            = 0;
 static constexpr int DEX2OAT_FROM_SCRATCH        = 1;
 static constexpr int DEX2OAT_FOR_BOOT_IMAGE      = 2;
 static constexpr int DEX2OAT_FOR_FILTER          = 3;
 static constexpr int DEX2OAT_FOR_RELOCATION      = 4;
-static constexpr int PATCHOAT_FOR_RELOCATION     = 5;
 
-typedef int fd_t;
-
-bool clear_reference_profile(const char* pkgname);
-bool clear_current_profile(const char* pkgname, userid_t user);
-bool clear_current_profiles(const char* pkgname);
+// Clear the reference profile for the primary apk of the given package.
+bool clear_primary_reference_profile(const std::string& pkgname);
+// Clear the current profile for the primary apk of the given package and user.
+bool clear_primary_current_profile(const std::string& pkgname, userid_t user);
+// Clear all current profile for the primary apk of the given package.
+bool clear_primary_current_profiles(const std::string& pkgname);
 
 bool move_ab(const char* apk_path, const char* instruction_set, const char* output_path);
 
-bool analyse_profiles(uid_t uid, const char* pkgname);
-bool dump_profiles(int32_t uid, const char* pkgname, const char* code_paths);
+// Decide if profile guided compilation is needed or not based on existing profiles.
+// The analysis is done for the primary apks (base + splits) of the given package.
+// Returns true if there is enough information in the current profiles that makes it
+// worth to recompile the package.
+// If the return value is true all the current profiles would have been merged into
+// the reference profiles accessible with open_reference_profile().
+bool analyze_primary_profiles(uid_t uid, const std::string& pkgname);
+
+bool dump_profiles(int32_t uid, const std::string& pkgname, const char* code_paths);
+
+bool copy_system_profile(const std::string& system_profile,
+                         uid_t packageUid,
+                         const std::string& data_profile_location);
 
 bool delete_odex(const char* apk_path, const char* instruction_set, const char* output_path);
 
+bool reconcile_secondary_dex_file(const std::string& dex_path,
+        const std::string& pkgname, int uid, const std::vector<std::string>& isas,
+        const std::unique_ptr<std::string>& volumeUuid, int storage_flag,
+        /*out*/bool* out_secondary_dex_exists);
+
 int dexopt(const char *apk_path, uid_t uid, const char *pkgName, const char *instruction_set,
         int dexopt_needed, const char* oat_dir, int dexopt_flags, const char* compiler_filter,
-        const char* volume_uuid, const char* shared_libraries);
+        const char* volume_uuid, const char* class_loader_context, const char* se_info,
+        bool downgrade);
 
-static constexpr size_t DEXOPT_PARAM_COUNT = 10U;
-static_assert(DEXOPT_PARAM_COUNT == 10U, "Unexpected dexopt param size");
+bool calculate_oat_file_path_default(char path[PKG_PATH_MAX], const char *oat_dir,
+        const char *apk_path, const char *instruction_set);
 
-// Helper for the above, converting arguments.
-int dexopt(const char* const params[DEXOPT_PARAM_COUNT]);
+bool calculate_odex_file_path_default(char path[PKG_PATH_MAX], const char *apk_path,
+        const char *instruction_set);
+
+bool create_cache_path_default(char path[PKG_PATH_MAX], const char *src,
+        const char *instruction_set);
 
 }  // namespace installd
 }  // namespace android

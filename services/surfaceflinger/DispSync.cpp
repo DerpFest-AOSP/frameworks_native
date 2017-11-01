@@ -33,6 +33,7 @@
 #include <ui/Fence.h>
 
 #include "DispSync.h"
+#include "SurfaceFlinger.h"
 #include "EventLog/EventLog.h"
 
 using std::max;
@@ -54,16 +55,12 @@ static const bool kEnableZeroPhaseTracer = false;
 // present time and the nearest software-predicted vsync.
 static const nsecs_t kErrorThreshold = 160000000000;    // 400 usec squared
 
-// This is the offset from the present fence timestamps to the corresponding
-// vsync event.
-static const int64_t kPresentTimeOffset = PRESENT_TIME_OFFSET_FROM_VSYNC_NS;
-
 #undef LOG_TAG
 #define LOG_TAG "DispSyncThread"
 class DispSyncThread: public Thread {
 public:
 
-    DispSyncThread(const char* name):
+    explicit DispSyncThread(const char* name):
             mName(name),
             mStop(false),
             mPeriod(0),
@@ -219,7 +216,8 @@ public:
         return BAD_VALUE;
     }
 
-    // This method is only here to handle the kIgnorePresentFences case.
+    // This method is only here to handle the !SurfaceFlinger::hasSyncFramework
+    // case.
     bool hasAnyEventListeners() {
         if (kTraceDetailedInfo) ATRACE_CALL();
         Mutex::Autolock lock(mMutex);
@@ -380,15 +378,21 @@ DispSync::DispSync(const char* name) :
         mName(name),
         mRefreshSkipCount(0),
         mThread(new DispSyncThread(name)) {
+}
 
+DispSync::~DispSync() {}
+
+void DispSync::init(bool hasSyncFramework, int64_t dispSyncPresentTimeOffset) {
+    mIgnorePresentFences = !hasSyncFramework;
+    mPresentTimeOffset = dispSyncPresentTimeOffset;
     mThread->run("DispSync", PRIORITY_URGENT_DISPLAY + PRIORITY_MORE_FAVORABLE);
+
     // set DispSync to SCHED_FIFO to minimize jitter
     struct sched_param param = {0};
     param.sched_priority = 2;
     if (sched_setscheduler(mThread->getTid(), SCHED_FIFO, &param) != 0) {
         ALOGE("Couldn't set SCHED_FIFO for DispSyncThread");
     }
-
 
     reset();
     beginResync();
@@ -399,13 +403,11 @@ DispSync::DispSync(const char* name) :
         // Even if we're just ignoring the fences, the zero-phase tracing is
         // not needed because any time there is an event registered we will
         // turn on the HW vsync events.
-        if (!kIgnorePresentFences && kEnableZeroPhaseTracer) {
+        if (!mIgnorePresentFences && kEnableZeroPhaseTracer) {
             addEventListener("ZeroPhaseTracer", 0, new ZeroPhaseTracer());
         }
     }
 }
-
-DispSync::~DispSync() {}
 
 void DispSync::reset() {
     Mutex::Autolock lock(mMutex);
@@ -433,7 +435,7 @@ bool DispSync::addPresentFence(const sp<Fence>& fence) {
             nsecs_t t = f->getSignalTime();
             if (t < INT64_MAX) {
                 mPresentFences[i].clear();
-                mPresentTimes[i] = t + kPresentTimeOffset;
+                mPresentTimes[i] = t + mPresentTimeOffset;
             }
         }
     }
@@ -478,7 +480,7 @@ bool DispSync::addResyncSample(nsecs_t timestamp) {
         resetErrorLocked();
     }
 
-    if (kIgnorePresentFences) {
+    if (mIgnorePresentFences) {
         // If we don't have the sync framework we will never have
         // addPresentFence called.  This means we have no way to know whether
         // or not we're synchronized with the HW vsyncs, so we just request
@@ -643,7 +645,7 @@ nsecs_t DispSync::computeNextRefresh(int periodOffset) const {
 void DispSync::dump(String8& result) const {
     Mutex::Autolock lock(mMutex);
     result.appendFormat("present fences are %s\n",
-            kIgnorePresentFences ? "ignored" : "used");
+            mIgnorePresentFences ? "ignored" : "used");
     result.appendFormat("mPeriod: %" PRId64 " ns (%.3f fps; skipCount=%d)\n",
             mPeriod, 1000000000.0 / mPeriod, mRefreshSkipCount);
     result.appendFormat("mPhase: %" PRId64 " ns\n", mPhase);
