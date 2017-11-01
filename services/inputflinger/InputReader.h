@@ -21,16 +21,20 @@
 #include "PointerControllerInterface.h"
 #include "InputListener.h"
 
+#include <input/DisplayViewport.h>
 #include <input/Input.h>
 #include <input/VelocityControl.h>
 #include <input/VelocityTracker.h>
 #include <ui/DisplayInfo.h>
 #include <utils/KeyedVector.h>
-#include <utils/threads.h>
+#include <utils/Condition.h>
+#include <utils/Thread.h>
+#include <utils/Mutex.h>
 #include <utils/Timers.h>
 #include <utils/RefBase.h>
 #include <utils/String8.h>
 #include <utils/BitSet.h>
+#include <utils/SortedVector.h>
 
 #include <stddef.h>
 #include <unistd.h>
@@ -47,70 +51,6 @@ namespace android {
 
 class InputDevice;
 class InputMapper;
-
-/*
- * Describes how coordinates are mapped on a physical display.
- * See com.android.server.display.DisplayViewport.
- */
-struct DisplayViewport {
-    int32_t displayId; // -1 if invalid
-    int32_t orientation;
-    int32_t logicalLeft;
-    int32_t logicalTop;
-    int32_t logicalRight;
-    int32_t logicalBottom;
-    int32_t physicalLeft;
-    int32_t physicalTop;
-    int32_t physicalRight;
-    int32_t physicalBottom;
-    int32_t deviceWidth;
-    int32_t deviceHeight;
-
-    DisplayViewport() :
-            displayId(ADISPLAY_ID_NONE), orientation(DISPLAY_ORIENTATION_0),
-            logicalLeft(0), logicalTop(0), logicalRight(0), logicalBottom(0),
-            physicalLeft(0), physicalTop(0), physicalRight(0), physicalBottom(0),
-            deviceWidth(0), deviceHeight(0) {
-    }
-
-    bool operator==(const DisplayViewport& other) const {
-        return displayId == other.displayId
-                && orientation == other.orientation
-                && logicalLeft == other.logicalLeft
-                && logicalTop == other.logicalTop
-                && logicalRight == other.logicalRight
-                && logicalBottom == other.logicalBottom
-                && physicalLeft == other.physicalLeft
-                && physicalTop == other.physicalTop
-                && physicalRight == other.physicalRight
-                && physicalBottom == other.physicalBottom
-                && deviceWidth == other.deviceWidth
-                && deviceHeight == other.deviceHeight;
-    }
-
-    bool operator!=(const DisplayViewport& other) const {
-        return !(*this == other);
-    }
-
-    inline bool isValid() const {
-        return displayId >= 0;
-    }
-
-    void setNonDisplayViewport(int32_t width, int32_t height) {
-        displayId = ADISPLAY_ID_NONE;
-        orientation = DISPLAY_ORIENTATION_0;
-        logicalLeft = 0;
-        logicalTop = 0;
-        logicalRight = width;
-        logicalBottom = height;
-        physicalLeft = 0;
-        physicalTop = 0;
-        physicalRight = width;
-        physicalBottom = height;
-        deviceWidth = width;
-        deviceHeight = height;
-    }
-};
 
 /*
  * Input reader configuration.
@@ -143,6 +83,12 @@ struct InputReaderConfiguration {
 
         // The presence of an external stylus has changed.
         CHANGE_EXTERNAL_STYLUS_PRESENCE = 1 << 7,
+
+        // The pointer capture mode has changed.
+        CHANGE_POINTER_CAPTURE = 1 << 8,
+
+        // The set of disabled input devices (disabledDevices) has changed.
+        CHANGE_ENABLED_STATE = 1 << 9,
 
         // All devices must be reopened.
         CHANGE_MUST_REOPEN = 1 << 31,
@@ -231,6 +177,12 @@ struct InputReaderConfiguration {
     // True to show the location of touches on the touch screen as spots.
     bool showTouches;
 
+    // True if pointer capture is enabled.
+    bool pointerCapture;
+
+    // The set of currently disabled input devices.
+    SortedVector<int32_t> disabledDevices;
+
     InputReaderConfiguration() :
             virtualKeyQuietTime(0),
             pointerVelocityControlParameters(1.0f, 500.0f, 3000.0f, 3.0f),
@@ -249,12 +201,19 @@ struct InputReaderConfiguration {
             pointerGestureZoomSpeedRatio(0.3f),
             showTouches(false) { }
 
-    bool getDisplayInfo(bool external, DisplayViewport* outViewport) const;
-    void setDisplayInfo(bool external, const DisplayViewport& viewport);
+    bool getDisplayViewport(ViewportType viewportType, const String8* displayId,
+            DisplayViewport* outViewport) const;
+    void setPhysicalDisplayViewport(ViewportType viewportType, const DisplayViewport& viewport);
+    void setVirtualDisplayViewports(const Vector<DisplayViewport>& viewports);
+
+
+    void dump(String8& dump) const;
+    void dumpViewport(String8& dump, const DisplayViewport& viewport) const;
 
 private:
     DisplayViewport mInternalDisplay;
     DisplayViewport mExternalDisplay;
+    Vector<DisplayViewport> mVirtualDisplays;
 };
 
 
@@ -337,6 +296,9 @@ public:
 
     /* Called by the heatbeat to ensures that the reader has not deadlocked. */
     virtual void monitor() = 0;
+
+    /* Returns true if the input device is enabled. */
+    virtual bool isInputDeviceEnabled(int32_t deviceId) = 0;
 
     /* Runs a single iteration of the processing loop.
      * Nominally reads and processes one incoming message from the EventHub.
@@ -456,6 +418,8 @@ public:
     virtual void loopOnce();
 
     virtual void getInputDevices(Vector<InputDeviceInfo>& outInputDevices);
+
+    virtual bool isInputDeviceEnabled(int32_t deviceId);
 
     virtual int32_t getScanCodeState(int32_t deviceId, uint32_t sourceMask,
             int32_t scanCode);
@@ -601,6 +565,9 @@ public:
     inline bool hasMic() const { return mHasMic; }
 
     inline bool isIgnored() { return mMappers.isEmpty(); }
+
+    bool isEnabled();
+    void setEnabled(bool enabled, nsecs_t when);
 
     void dump(String8& dump);
     void addMapper(InputMapper* mapper);
@@ -1161,6 +1128,7 @@ private:
     void dumpParameters(String8& dump);
 
     bool isKeyboardOrGamepadKey(int32_t scanCode);
+    bool isMediaKey(int32_t keyCode);
 
     void processKey(nsecs_t when, bool down, int32_t scanCode, int32_t usageCode);
 
@@ -1200,6 +1168,7 @@ private:
     struct Parameters {
         enum Mode {
             MODE_POINTER,
+            MODE_POINTER_RELATIVE,
             MODE_NAVIGATION,
         };
 
@@ -1334,6 +1303,7 @@ protected:
         bool associatedDisplayIsExternal;
         bool orientationAware;
         bool hasButtonUnderPad;
+        String8 uniqueDisplayId;
 
         enum GestureMode {
             GESTURE_MODE_SINGLE_TOUCH,
@@ -1882,6 +1852,8 @@ private:
     const VirtualKey* findVirtualKeyHit(int32_t x, int32_t y);
 
     static void assignPointerIds(const RawState* last, RawState* current);
+
+    const char* modeToString(DeviceMode deviceMode);
 };
 
 

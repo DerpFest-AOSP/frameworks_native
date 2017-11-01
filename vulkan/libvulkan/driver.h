@@ -102,11 +102,16 @@ struct DeviceData {
 
     VkDevice driver_device;
     DeviceDriverTable driver;
+    uint32_t driver_version;
 };
 
 bool Debuggable();
 bool OpenHAL();
 const VkAllocationCallbacks& GetDefaultAllocator();
+
+bool QueryPresentationProperties(
+    VkPhysicalDevice physicalDevice,
+    VkPhysicalDevicePresentationPropertiesANDROID *presentation_properties);
 
 // clang-format off
 VKAPI_ATTR PFN_vkVoidFunction GetInstanceProcAddr(VkInstance instance, const char* pName);

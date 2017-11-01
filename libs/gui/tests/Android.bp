@@ -4,18 +4,23 @@
 // to integrate with auto-test framework.
 cc_test {
     name: "libgui_test",
+    test_suites: ["device-tests"],
 
     clang: true,
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
 
     srcs: [
+        "BufferItemConsumer_test.cpp",
         "BufferQueue_test.cpp",
         "CpuConsumer_test.cpp",
         "FillBuffer.cpp",
         "GLTest.cpp",
         "IGraphicBufferProducer_test.cpp",
+        "Malicious.cpp",
         "MultiTextureConsumer_test.cpp",
-        "Sensor_test.cpp",
-        "SRGB_test.cpp",
         "StreamSplitter_test.cpp",
         "SurfaceTextureClient_test.cpp",
         "SurfaceTextureFBO_test.cpp",
@@ -28,6 +33,8 @@ cc_test {
     ],
 
     shared_libs: [
+        "android.hardware.configstore@1.0",
+        "android.hardware.configstore-utils",
         "liblog",
         "libEGL",
         "libGLESv1_CM",
@@ -35,8 +42,10 @@ cc_test {
         "libbinder",
         "libcutils",
         "libgui",
-        "libsync",
+        "libhidlbase",
+        "libhidltransport",
         "libui",
         "libutils",
+        "libnativewindow"
     ],
 }

@@ -15,6 +15,8 @@
  */
 
 #include <inttypes.h>
+#include <pwd.h>
+#include <sys/types.h>
 
 #define LOG_TAG "BufferQueueConsumer"
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
@@ -34,7 +36,8 @@
 
 #include <binder/IPCThreadState.h>
 #include <binder/PermissionCache.h>
-#include <private/android_filesystem_config.h>
+
+#include <system/window.h>
 
 namespace android {
 
@@ -205,6 +208,7 @@ status_t BufferQueueConsumer::acquireBuffer(BufferItem* outBuffer,
             // was cached when it was last queued.
             outBuffer->mGraphicBuffer = mSlots[slot].mGraphicBuffer;
             outBuffer->mFence = Fence::NO_FENCE;
+            outBuffer->mFenceTime = FenceTime::NO_FENCE;
             outBuffer->mCrop = mCore->mSharedBufferCache.crop;
             outBuffer->mTransform = mCore->mSharedBufferCache.transform &
                     ~static_cast<uint32_t>(
@@ -674,12 +678,13 @@ status_t BufferQueueConsumer::setMaxAcquiredBufferCount(
     return NO_ERROR;
 }
 
-void BufferQueueConsumer::setConsumerName(const String8& name) {
+status_t BufferQueueConsumer::setConsumerName(const String8& name) {
     ATRACE_CALL();
     BQ_LOGV("setConsumerName: '%s'", name.string());
     Mutex::Autolock lock(mCore->mMutex);
     mCore->mConsumerName = name;
     mConsumerName = name;
+    return NO_ERROR;
 }
 
 status_t BufferQueueConsumer::setDefaultBufferFormat(PixelFormat defaultFormat) {
@@ -699,11 +704,19 @@ status_t BufferQueueConsumer::setDefaultBufferDataSpace(
     return NO_ERROR;
 }
 
-status_t BufferQueueConsumer::setConsumerUsageBits(uint32_t usage) {
+status_t BufferQueueConsumer::setConsumerUsageBits(uint64_t usage) {
     ATRACE_CALL();
-    BQ_LOGV("setConsumerUsageBits: %#x", usage);
+    BQ_LOGV("setConsumerUsageBits: %#" PRIx64, usage);
     Mutex::Autolock lock(mCore->mMutex);
     mCore->mConsumerUsageBits = usage;
+    return NO_ERROR;
+}
+
+status_t BufferQueueConsumer::setConsumerIsProtected(bool isProtected) {
+    ATRACE_CALL();
+    BQ_LOGV("setConsumerIsProtected: %s", isProtected ? "true" : "false");
+    Mutex::Autolock lock(mCore->mMutex);
+    mCore->mConsumerIsProtected = isProtected;
     return NO_ERROR;
 }
 
@@ -715,8 +728,10 @@ status_t BufferQueueConsumer::setTransformHint(uint32_t hint) {
     return NO_ERROR;
 }
 
-sp<NativeHandle> BufferQueueConsumer::getSidebandStream() const {
-    return mCore->mSidebandStream;
+status_t BufferQueueConsumer::getSidebandStream(sp<NativeHandle>* outStream) const {
+    Mutex::Autolock lock(mCore->mMutex);
+    *outStream = mCore->mSidebandStream;
+    return NO_ERROR;
 }
 
 status_t BufferQueueConsumer::getOccupancyHistory(bool forceFlush,
@@ -732,20 +747,29 @@ status_t BufferQueueConsumer::discardFreeBuffers() {
     return NO_ERROR;
 }
 
-void BufferQueueConsumer::dumpState(String8& result, const char* prefix) const {
+status_t BufferQueueConsumer::dumpState(const String8& prefix, String8* outResult) const {
+    struct passwd* pwd = getpwnam("shell");
+    uid_t shellUid = pwd ? pwd->pw_uid : 0;
+    if (!shellUid) {
+        int savedErrno = errno;
+        BQ_LOGE("Cannot get AID_SHELL");
+        return savedErrno ? -savedErrno : UNKNOWN_ERROR;
+    }
+
     const IPCThreadState* ipc = IPCThreadState::self();
     const pid_t pid = ipc->getCallingPid();
     const uid_t uid = ipc->getCallingUid();
-    if ((uid != AID_SHELL)
-            && !PermissionCache::checkPermission(String16(
-            "android.permission.DUMP"), pid, uid)) {
-        result.appendFormat("Permission Denial: can't dump BufferQueueConsumer "
+    if ((uid != shellUid) &&
+        !PermissionCache::checkPermission(String16("android.permission.DUMP"), pid, uid)) {
+        outResult->appendFormat("Permission Denial: can't dump BufferQueueConsumer "
                 "from pid=%d, uid=%d\n", pid, uid);
         android_errorWriteWithInfoLog(0x534e4554, "27046057",
                 static_cast<int32_t>(uid), NULL, 0);
-    } else {
-        mCore->dumpState(result, prefix);
+        return PERMISSION_DENIED;
     }
+
+    mCore->dumpState(prefix, outResult);
+    return NO_ERROR;
 }
 
 } // namespace android

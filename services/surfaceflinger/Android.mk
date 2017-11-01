@@ -9,19 +9,23 @@ LOCAL_SRC_FILES := \
     DisplayDevice.cpp \
     DispSync.cpp \
     EventControlThread.cpp \
+    StartPropertySetThread.cpp \
     EventThread.cpp \
-    FenceTracker.cpp \
     FrameTracker.cpp \
     GpuService.cpp \
     Layer.cpp \
     LayerDim.cpp \
+    LayerRejecter.cpp \
+    LayerVector.cpp \
     MessageQueue.cpp \
     MonitoredProducer.cpp \
     SurfaceFlingerConsumer.cpp \
+    SurfaceInterceptor.cpp \
     Transform.cpp \
+    DisplayHardware/ComposerHal.cpp \
     DisplayHardware/FramebufferSurface.cpp \
     DisplayHardware/HWC2.cpp \
-    DisplayHardware/HWC2On1Adapter.cpp \
+    DisplayHardware/HWComposerBufferCache.cpp \
     DisplayHardware/PowerHAL.cpp \
     DisplayHardware/VirtualDisplaySurface.cpp \
     Effects/Daltonizer.cpp \
@@ -34,13 +38,13 @@ LOCAL_SRC_FILES := \
     RenderEngine/GLExtensions.cpp \
     RenderEngine/RenderEngine.cpp \
     RenderEngine/Texture.cpp \
-    RenderEngine/GLES10RenderEngine.cpp \
-    RenderEngine/GLES11RenderEngine.cpp \
-    RenderEngine/GLES20RenderEngine.cpp
+    RenderEngine/GLES20RenderEngine.cpp \
 
+LOCAL_MODULE := libsurfaceflinger
 LOCAL_C_INCLUDES := \
-	frameworks/native/vulkan/include \
-	external/vulkan-validation-layers/libs/vkjson
+    frameworks/native/vulkan/include \
+    external/vulkan-validation-layers/libs/vkjson \
+    system/libhwbinder/fast_msgq/include \
 
 LOCAL_CFLAGS := -DLOG_TAG=\"SurfaceFlinger\"
 LOCAL_CFLAGS += -DGL_GLEXT_PROTOTYPES -DEGL_EGLEXT_PROTOTYPES
@@ -56,81 +60,29 @@ else
         DisplayHardware/HWComposer_hwc1.cpp
 endif
 
-ifeq ($(TARGET_BOARD_PLATFORM),omap4)
-    LOCAL_CFLAGS += -DHAS_CONTEXT_PRIORITY
-endif
-ifeq ($(TARGET_BOARD_PLATFORM),s5pc110)
-    LOCAL_CFLAGS += -DHAS_CONTEXT_PRIORITY
-endif
-
-ifeq ($(TARGET_DISABLE_TRIPLE_BUFFERING),true)
-    LOCAL_CFLAGS += -DTARGET_DISABLE_TRIPLE_BUFFERING
-endif
-
-ifeq ($(TARGET_FORCE_HWC_FOR_VIRTUAL_DISPLAYS),true)
-    LOCAL_CFLAGS += -DFORCE_HWC_COPY_FOR_VIRTUAL_DISPLAYS
-endif
-
-ifneq ($(NUM_FRAMEBUFFER_SURFACE_BUFFERS),)
-    LOCAL_CFLAGS += -DNUM_FRAMEBUFFER_SURFACE_BUFFERS=$(NUM_FRAMEBUFFER_SURFACE_BUFFERS)
-endif
-
-ifeq ($(TARGET_RUNNING_WITHOUT_SYNC_FRAMEWORK),true)
-    LOCAL_CFLAGS += -DRUNNING_WITHOUT_SYNC_FRAMEWORK
-endif
-
-# The following two BoardConfig variables define (respectively):
-#
-#   - The phase offset between hardware vsync and when apps are woken up by the
-#     Choreographer callback
-#   - The phase offset between hardware vsync and when SurfaceFlinger wakes up
-#     to consume input
-#
-# Their values can be tuned to trade off between display pipeline latency (both
-# overall latency and the lengths of the app --> SF and SF --> display phases)
-# and frame delivery jitter (which typically manifests as "jank" or "jerkiness"
-# while interacting with the device). The default values should produce a
-# relatively low amount of jitter at the expense of roughly two frames of
-# app --> display latency, and unless significant testing is performed to avoid
-# increased display jitter (both manual investigation using systrace [1] and
-# automated testing using dumpsys gfxinfo [2] are recommended), they should not
-# be modified.
-#
-# [1] https://developer.android.com/studio/profile/systrace.html
-# [2] https://developer.android.com/training/testing/performance.html
-
-ifneq ($(VSYNC_EVENT_PHASE_OFFSET_NS),)
-    LOCAL_CFLAGS += -DVSYNC_EVENT_PHASE_OFFSET_NS=$(VSYNC_EVENT_PHASE_OFFSET_NS)
-else
-    LOCAL_CFLAGS += -DVSYNC_EVENT_PHASE_OFFSET_NS=1000000
-endif
-
-ifneq ($(SF_VSYNC_EVENT_PHASE_OFFSET_NS),)
-    LOCAL_CFLAGS += -DSF_VSYNC_EVENT_PHASE_OFFSET_NS=$(SF_VSYNC_EVENT_PHASE_OFFSET_NS)
-else
-    LOCAL_CFLAGS += -DSF_VSYNC_EVENT_PHASE_OFFSET_NS=1000000
-endif
-
-ifneq ($(PRESENT_TIME_OFFSET_FROM_VSYNC_NS),)
-    LOCAL_CFLAGS += -DPRESENT_TIME_OFFSET_FROM_VSYNC_NS=$(PRESENT_TIME_OFFSET_FROM_VSYNC_NS)
-else
-    LOCAL_CFLAGS += -DPRESENT_TIME_OFFSET_FROM_VSYNC_NS=0
-endif
-
-ifneq ($(MAX_VIRTUAL_DISPLAY_DIMENSION),)
-    LOCAL_CFLAGS += -DMAX_VIRTUAL_DISPLAY_DIMENSION=$(MAX_VIRTUAL_DISPLAY_DIMENSION)
-else
-    LOCAL_CFLAGS += -DMAX_VIRTUAL_DISPLAY_DIMENSION=0
-endif
-
 LOCAL_CFLAGS += -fvisibility=hidden -Werror=format
 
-LOCAL_STATIC_LIBRARIES := libvkjson
+LOCAL_STATIC_LIBRARIES := \
+    libhwcomposer-command-buffer \
+    libtrace_proto \
+    libvkjson \
+    libvr_manager \
+    libvrflinger
+
 LOCAL_SHARED_LIBRARIES := \
+    android.frameworks.vr.composer@1.0 \
+    android.hardware.graphics.allocator@2.0 \
+    android.hardware.graphics.composer@2.1 \
+    android.hardware.configstore@1.0 \
+    android.hardware.configstore-utils \
     libcutils \
     liblog \
     libdl \
+    libfmq \
     libhardware \
+    libhidlbase \
+    libhidltransport \
+    libhwbinder \
     libutils \
     libEGL \
     libGLESv1_CM \
@@ -139,11 +91,20 @@ LOCAL_SHARED_LIBRARIES := \
     libui \
     libgui \
     libpowermanager \
-    libvulkan
+    libvulkan \
+    libsync \
+    libprotobuf-cpp-lite \
+    libbase \
+    android.hardware.power@1.0
 
-LOCAL_MODULE := libsurfaceflinger
+LOCAL_EXPORT_SHARED_LIBRARY_HEADERS := \
+    android.hardware.graphics.allocator@2.0 \
+    android.hardware.graphics.composer@2.1 \
+    libhidlbase \
+    libhidltransport \
+    libhwbinder
 
-LOCAL_CFLAGS += -Wall -Werror -Wunused -Wunreachable-code
+LOCAL_CFLAGS += -Wall -Werror -Wunused -Wunreachable-code -std=c++1z
 
 include $(BUILD_SHARED_LIBRARY)
 
@@ -159,10 +120,6 @@ LOCAL_CFLAGS := -DLOG_TAG=\"SurfaceFlinger\"
 
 LOCAL_INIT_RC := surfaceflinger.rc
 
-ifneq ($(ENABLE_CPUSETS),)
-    LOCAL_CFLAGS += -DENABLE_CPUSETS
-endif
-
 ifeq ($(TARGET_USES_HWC2),true)
     LOCAL_CFLAGS += -DUSE_HWC2
 endif
@@ -171,14 +128,24 @@ LOCAL_SRC_FILES := \
     main_surfaceflinger.cpp
 
 LOCAL_SHARED_LIBRARIES := \
+    android.frameworks.displayservice@1.0 \
+    android.hardware.configstore@1.0 \
+    android.hardware.configstore-utils \
+    android.hardware.graphics.allocator@2.0 \
     libsurfaceflinger \
     libcutils \
+    libdisplayservicehidl \
     liblog \
     libbinder \
+    libhidlbase \
+    libhidltransport \
     libutils \
+    libui \
+    libgui \
     libdl
 
 LOCAL_WHOLE_STATIC_LIBRARIES := libsigchain
+LOCAL_STATIC_LIBRARIES := libtrace_proto
 
 LOCAL_MODULE := surfaceflinger
 
@@ -213,3 +180,5 @@ LOCAL_CFLAGS += -Wall -Werror -Wunused -Wunreachable-code
 
 include $(BUILD_SHARED_LIBRARY)
 endif # libnativehelper
+
+include $(call first-makefiles-under,$(LOCAL_PATH))

@@ -6,7 +6,6 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := otapreopt
-LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS := -Wall -Werror
 
 # Base & ASLR boundaries for boot image creation.
@@ -24,10 +23,10 @@ LOCAL_CFLAGS += -DART_BASE_ADDRESS=$(LIBART_IMG_HOST_BASE_ADDRESS)
 LOCAL_CFLAGS += -DART_BASE_ADDRESS_MIN_DELTA=$(LOCAL_LIBART_IMG_HOST_MIN_BASE_ADDRESS_DELTA)
 LOCAL_CFLAGS += -DART_BASE_ADDRESS_MAX_DELTA=$(LOCAL_LIBART_IMG_HOST_MAX_BASE_ADDRESS_DELTA)
 
-LOCAL_SRC_FILES := otapreopt.cpp InstalldNativeService.cpp globals.cpp utils.cpp dexopt.cpp binder/android/os/IInstalld.aidl
+LOCAL_SRC_FILES := otapreopt.cpp globals.cpp utils.cpp dexopt.cpp
+LOCAL_HEADER_LIBRARIES := dex2oat_headers
 LOCAL_SHARED_LIBRARIES := \
     libbase \
-    libbinder \
     libcutils \
     liblog \
     liblogwrap \
@@ -35,7 +34,6 @@ LOCAL_SHARED_LIBRARIES := \
     libutils \
 
 LOCAL_STATIC_LIBRARIES := libdiskusage
-LOCAL_ADDITIONAL_DEPENDENCIES += $(LOCAL_PATH)/Android.mk
 LOCAL_CLANG := true
 include $(BUILD_EXECUTABLE)
 

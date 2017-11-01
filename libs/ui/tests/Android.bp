@@ -18,14 +18,12 @@ cc_test {
     name: "Region_test",
     shared_libs: ["libui"],
     srcs: ["Region_test.cpp"],
+    cflags: ["-Wall", "-Werror"],
 }
 
 cc_test {
-    name: "vec_test",
-    srcs: ["vec_test.cpp"],
-}
-
-cc_test {
-    name: "mat_test",
-    srcs: ["mat_test.cpp"],
+    name: "colorspace_test",
+    shared_libs: ["libui"],
+    srcs: ["colorspace_test.cpp"],
+    cflags: ["-Wall", "-Werror"],
 }

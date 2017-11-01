@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <private/gui/BitTube.h>
 #include <gui/DisplayEventReceiver.h>
 #include <gui/IDisplayEventConnection.h>
 
@@ -68,16 +69,16 @@ class EventThread : public Thread, private VSyncSource::Callback {
     private:
         virtual ~Connection();
         virtual void onFirstRef();
-        virtual sp<BitTube> getDataChannel() const;
-        virtual void setVsyncRate(uint32_t count);
-        virtual void requestNextVsync();    // asynchronous
+        status_t stealReceiveChannel(gui::BitTube* outChannel) override;
+        status_t setVsyncRate(uint32_t count) override;
+        void requestNextVsync() override;    // asynchronous
         sp<EventThread> const mEventThread;
-        sp<BitTube> const mChannel;
+        gui::BitTube mChannel;
     };
 
 public:
 
-    EventThread(const sp<VSyncSource>& src, SurfaceFlinger& flinger);
+    EventThread(const sp<VSyncSource>& src, SurfaceFlinger& flinger, bool interceptVSyncs);
 
     sp<Connection> createEventConnection() const;
     status_t registerDisplayEventConnection(const sp<Connection>& connection);
@@ -132,6 +133,7 @@ private:
     bool mDebugVsyncEnabled;
 
     bool mVsyncHintSent;
+    const bool mInterceptVSyncs;
     timer_t mTimerId;
 };
 

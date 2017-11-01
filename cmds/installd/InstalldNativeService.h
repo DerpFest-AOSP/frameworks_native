@@ -22,7 +22,9 @@
 #include <unistd.h>
 
 #include <vector>
+#include <unordered_map>
 
+#include <android-base/macros.h>
 #include <binder/BinderService.h>
 #include <cutils/multiuser.h>
 
@@ -56,6 +58,8 @@ public:
     binder::Status destroyAppData(const std::unique_ptr<std::string>& uuid,
             const std::string& packageName, int32_t userId, int32_t flags, int64_t ceDataInode);
 
+    binder::Status fixupAppData(const std::unique_ptr<std::string>& uuid, int32_t flags);
+
     binder::Status getAppSize(const std::unique_ptr<std::string>& uuid,
             const std::vector<std::string>& packageNames, int32_t userId, int32_t flags,
             int32_t appId, const std::vector<int64_t>& ceDataInodes,
@@ -64,7 +68,11 @@ public:
             int32_t userId, int32_t flags, const std::vector<int32_t>& appIds,
             std::vector<int64_t>* _aidl_return);
     binder::Status getExternalSize(const std::unique_ptr<std::string>& uuid,
-            int32_t userId, int32_t flags, std::vector<int64_t>* _aidl_return);
+            int32_t userId, int32_t flags, const std::vector<int32_t>& appIds,
+            std::vector<int64_t>* _aidl_return);
+
+    binder::Status setAppQuota(const std::unique_ptr<std::string>& uuid,
+            int32_t userId, int32_t appId, int64_t cacheQuota);
 
     binder::Status moveCompleteApp(const std::unique_ptr<std::string>& fromUuid,
             const std::unique_ptr<std::string>& toUuid, const std::string& packageName,
@@ -75,21 +83,26 @@ public:
             const std::unique_ptr<std::string>& packageName, const std::string& instructionSet,
             int32_t dexoptNeeded, const std::unique_ptr<std::string>& outputPath, int32_t dexFlags,
             const std::string& compilerFilter, const std::unique_ptr<std::string>& uuid,
-            const std::unique_ptr<std::string>& sharedLibraries);
+            const std::unique_ptr<std::string>& classLoaderContext,
+            const std::unique_ptr<std::string>& seInfo, bool downgrade);
 
     binder::Status rmdex(const std::string& codePath, const std::string& instructionSet);
 
     binder::Status mergeProfiles(int32_t uid, const std::string& packageName, bool* _aidl_return);
     binder::Status dumpProfiles(int32_t uid, const std::string& packageName,
             const std::string& codePaths, bool* _aidl_return);
+    binder::Status copySystemProfile(const std::string& systemProfile,
+            int32_t uid, const std::string& packageName, bool* _aidl_return);
     binder::Status clearAppProfiles(const std::string& packageName);
     binder::Status destroyAppProfiles(const std::string& packageName);
 
     binder::Status idmap(const std::string& targetApkPath, const std::string& overlayApkPath,
             int32_t uid);
+    binder::Status removeIdmap(const std::string& overlayApkPath);
     binder::Status rmPackageDir(const std::string& packageDir);
     binder::Status markBootComplete(const std::string& instructionSet);
-    binder::Status freeCache(const std::unique_ptr<std::string>& uuid, int64_t freeStorageSize);
+    binder::Status freeCache(const std::unique_ptr<std::string>& uuid, int64_t targetFreeBytes,
+            int64_t cacheReservedBytes, int32_t flags);
     binder::Status linkNativeLibraryDirectory(const std::unique_ptr<std::string>& uuid,
             const std::string& packageName, const std::string& nativeLibPath32, int32_t userId);
     binder::Status createOatDir(const std::string& oatDir, const std::string& instructionSet);
@@ -98,7 +111,31 @@ public:
     binder::Status moveAb(const std::string& apkPath, const std::string& instructionSet,
             const std::string& outputPath);
     binder::Status deleteOdex(const std::string& apkPath, const std::string& instructionSet,
-            const std::string& outputPath);
+            const std::unique_ptr<std::string>& outputPath);
+    binder::Status reconcileSecondaryDexFile(const std::string& dexPath,
+        const std::string& packageName, int32_t uid, const std::vector<std::string>& isa,
+        const std::unique_ptr<std::string>& volumeUuid, int32_t storage_flag, bool* _aidl_return);
+
+    binder::Status invalidateMounts();
+    binder::Status isQuotaSupported(const std::unique_ptr<std::string>& volumeUuid,
+            bool* _aidl_return);
+
+private:
+    std::recursive_mutex mLock;
+
+    std::recursive_mutex mMountsLock;
+    std::recursive_mutex mQuotasLock;
+
+    /* Map of all storage mounts from source to target */
+    std::unordered_map<std::string, std::string> mStorageMounts;
+    /* Map of all quota mounts from target to source */
+    std::unordered_map<std::string, std::string> mQuotaReverseMounts;
+
+    /* Map from UID to cache quota size */
+    std::unordered_map<uid_t, int64_t> mCacheQuotas;
+
+    std::string findDataMediaPath(const std::unique_ptr<std::string>& uuid, userid_t userid);
+    std::string findQuotaDeviceForUuid(const std::unique_ptr<std::string>& uuid);
 };
 
 }  // namespace installd

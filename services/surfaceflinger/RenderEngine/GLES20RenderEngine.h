@@ -59,7 +59,7 @@ class GLES20RenderEngine : public RenderEngine {
     virtual void unbindFramebuffer(uint32_t texName, uint32_t fbName);
 
 public:
-    GLES20RenderEngine();
+    GLES20RenderEngine(uint32_t featureFlags); // See RenderEngine::FeatureFlag
 
 protected:
     virtual ~GLES20RenderEngine();
@@ -72,11 +72,33 @@ protected:
     virtual void setupLayerBlending(bool premultipliedAlpha, bool opaque,
             float alpha) override;
     virtual void setupDimLayerBlending(float alpha) override;
+
+    // Color management related functions and state
+    void setColorMode(android_color_mode mode);
+    void setSourceDataSpace(android_dataspace source);
+    void setWideColor(bool hasWideColor);
+    bool usesWideColor();
+
+    // Current color mode of display using the render engine
+    android_color_mode mColorMode = HAL_COLOR_MODE_NATIVE;
+
+    // Current dataspace of layer being rendered
+    android_dataspace mDataSpace = HAL_DATASPACE_V0_SRGB;
+
+    // Indicate if wide-color mode is needed or not
+    bool mDisplayHasWideColor = false;
+    bool mUseWideColor = false;
+    uint64_t mWideColorFrameCount = 0;
+
+    // Currently only supporting sRGB and DisplayP3 color spaces
+    mat4 mSrgbToDisplayP3;
 #else
     virtual void setupLayerBlending(bool premultipliedAlpha, bool opaque,
             int alpha);
     virtual void setupDimLayerBlending(int alpha);
 #endif
+    bool mPlatformHasWideColor = false;
+
     virtual void setupLayerTexturing(const Texture& texture);
     virtual void setupLayerBlackedOut();
     virtual void setupFillWithColor(float r, float g, float b, float a);

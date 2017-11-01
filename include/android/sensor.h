@@ -48,20 +48,32 @@
  *
  */
 
-#include <sys/types.h>
-
 #include <android/looper.h>
+
+#include <stdbool.h>
+#include <sys/types.h>
+#include <math.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+typedef struct AHardwareBuffer AHardwareBuffer;
+
+#define ASENSOR_RESOLUTION_INVALID     (nanf(""))
+#define ASENSOR_FIFO_COUNT_INVALID     (-1)
+#define ASENSOR_DELAY_INVALID          INT32_MIN
 
 /**
  * Sensor types.
  * (keep in sync with hardware/sensors.h)
  */
 enum {
+    /**
+     * Invalid sensor type. Returned by {@link ASensor_getType} as error value.
+     */
+    ASENSOR_TYPE_INVALID = -1,
     /**
      * {@link ASENSOR_TYPE_ACCELEROMETER}
      * reporting-mode: continuous
@@ -134,6 +146,8 @@ enum {
  * Sensor Reporting Modes.
  */
 enum {
+    /** invalid reporting mode */
+    AREPORTING_MODE_INVALID = -1,
     /** continuous reporting */
     AREPORTING_MODE_CONTINUOUS = 0,
     /** reporting on change */
@@ -142,6 +156,30 @@ enum {
     AREPORTING_MODE_ONE_SHOT = 2,
     /** special trigger reporting */
     AREPORTING_MODE_SPECIAL_TRIGGER = 3
+};
+
+/**
+ * Sensor Direct Report Rates.
+ */
+enum {
+    /** stopped */
+    ASENSOR_DIRECT_RATE_STOP = 0,
+    /** nominal 50Hz */
+    ASENSOR_DIRECT_RATE_NORMAL = 1,
+    /** nominal 200Hz */
+    ASENSOR_DIRECT_RATE_FAST = 2,
+    /** nominal 800Hz */
+    ASENSOR_DIRECT_RATE_VERY_FAST = 3
+};
+
+/**
+ * Sensor Direct Channel Type.
+ */
+enum {
+    /** shared memory created by ASharedMemory_create */
+    ASENSOR_DIRECT_CHANNEL_TYPE_SHARED_MEMORY = 1,
+    /** AHardwareBuffer */
+    ASENSOR_DIRECT_CHANNEL_TYPE_HARDWARE_BUFFER = 2
 };
 
 /*
@@ -159,7 +197,7 @@ enum {
  * A sensor event.
  */
 
-/* NOTE: Must match hardware/sensors.h */
+/* NOTE: changes to these structs have to be backward compatible */
 typedef struct ASensorVector {
     union {
         float v[3];
@@ -221,7 +259,7 @@ typedef struct {
     };
 } AAdditionalInfoEvent;
 
-/* NOTE: Must match hardware/sensors.h */
+/* NOTE: changes to this struct has to be backward compatible */
 typedef struct ASensorEvent {
     int32_t version; /* sizeof(struct ASensorEvent) */
     int32_t sensor;
@@ -343,18 +381,24 @@ typedef ASensorRef const* ASensorList;
  *     ASensorManager* sensorManager = ASensorManager_getInstance();
  *
  */
+#if __ANDROID_API__ >= __ANDROID_API_O__
 __attribute__ ((deprecated)) ASensorManager* ASensorManager_getInstance();
+#else
+ASensorManager* ASensorManager_getInstance();
+#endif
 
-/*
+#if __ANDROID_API__ >= __ANDROID_API_O__
+/**
  * Get a reference to the sensor manager. ASensorManager is a singleton
  * per package as different packages may have access to different sensors.
  *
  * Example:
  *
- *    ASensorManager* sensorManager = ASensorManager_getInstanceForPackage("foo.bar.baz");
+ *     ASensorManager* sensorManager = ASensorManager_getInstanceForPackage("foo.bar.baz");
  *
  */
 ASensorManager* ASensorManager_getInstanceForPackage(const char* packageName);
+#endif
 
 /**
  * Returns the list of available sensors.
@@ -372,8 +416,7 @@ ASensor const* ASensorManager_getDefaultSensor(ASensorManager* manager, int type
  * Returns the default sensor with the given type and wakeUp properties or NULL if no sensor
  * of this type and wakeUp properties exists.
  */
-ASensor const* ASensorManager_getDefaultSensorEx(ASensorManager* manager, int type,
-        bool wakeUp);
+ASensor const* ASensorManager_getDefaultSensorEx(ASensorManager* manager, int type, bool wakeUp);
 #endif
 
 /**
@@ -391,58 +434,183 @@ ASensorEventQueue* ASensorManager_createEventQueue(ASensorManager* manager,
  */
 int ASensorManager_destroyEventQueue(ASensorManager* manager, ASensorEventQueue* queue);
 
+#if __ANDROID_API__ >= __ANDROID_API_O__
+/**
+ * Create direct channel based on shared memory
+ *
+ * Create a direct channel of {@link ASENSOR_DIRECT_CHANNEL_TYPE_SHARED_MEMORY} to be used
+ * for configuring sensor direct report.
+ *
+ * \param manager the {@link ASensorManager} instance obtained from
+ *                {@link ASensorManager_getInstanceForPackage}.
+ * \param fd      file descriptor representing a shared memory created by
+ *                {@link ASharedMemory_create}
+ * \param size    size to be used, must be less or equal to size of shared memory.
+ *
+ * \return a positive integer as a channel id to be used in
+ *         {@link ASensorManager_destroyDirectChannel} and
+ *         {@link ASensorManager_configureDirectReport}, or value less or equal to 0 for failures.
+ */
+int ASensorManager_createSharedMemoryDirectChannel(ASensorManager* manager, int fd, size_t size);
+
+/**
+ * Create direct channel based on AHardwareBuffer
+ *
+ * Create a direct channel of {@link ASENSOR_DIRECT_CHANNEL_TYPE_HARDWARE_BUFFER} type to be used
+ * for configuring sensor direct report.
+ *
+ * \param manager the {@link ASensorManager} instance obtained from
+ *                {@link ASensorManager_getInstanceForPackage}.
+ * \param buffer  {@link AHardwareBuffer} instance created by {@link AHardwareBuffer_allocate}.
+ * \param size    the intended size to be used, must be less or equal to size of buffer.
+ *
+ * \return a positive integer as a channel id to be used in
+ *         {@link ASensorManager_destroyDirectChannel} and
+ *         {@link ASensorManager_configureDirectReport}, or value less or equal to 0 for failures.
+ */
+int ASensorManager_createHardwareBufferDirectChannel(
+        ASensorManager* manager, AHardwareBuffer const * buffer, size_t size);
+
+/**
+ * Destroy a direct channel
+ *
+ * Destroy a direct channel previously created using {@link ASensorManager_createDirectChannel}.
+ * The buffer used for creating direct channel does not get destroyed with
+ * {@link ASensorManager_destroy} and has to be close or released separately.
+ *
+ * \param manager the {@link ASensorManager} instance obtained from
+ *                {@link ASensorManager_getInstanceForPackage}.
+ * \param channelId channel id (a positive integer) returned from
+ *                  {@link ASensorManager_createSharedMemoryDirectChannel} or
+ *                  {@link ASensorManager_createHardwareBufferDirectChannel}.
+ */
+void ASensorManager_destroyDirectChannel(ASensorManager* manager, int channelId);
+
+/**
+ * Configure direct report on channel
+ *
+ * Configure sensor direct report on a direct channel: set rate to value other than
+ * {@link ASENSOR_DIRECT_RATE_STOP} so that sensor event can be directly
+ * written into the shared memory region used for creating the buffer. It returns a positive token
+ * which can be used for identify sensor events from different sensors on success. Calling with rate
+ * {@link ASENSOR_DIRECT_RATE_STOP} will stop direct report of the sensor specified in the channel.
+ *
+ * To stop all active sensor direct report configured to a channel, set sensor to NULL and rate to
+ * {@link ASENSOR_DIRECT_RATE_STOP}.
+ *
+ * In order to successfully configure a direct report, the sensor has to support the specified rate
+ * and the channel type, which can be checked by {@link ASensor_getHighestDirectReportRateLevel} and
+ * {@link ASensor_isDirectChannelTypeSupported}, respectively.
+ *
+ * Example:
+ *
+ *     ASensorManager *manager = ...;
+ *     ASensor *sensor = ...;
+ *     int channelId = ...;
+ *
+ *     ASensorManager_configureDirectReport(manager, sensor, channel_id, ASENSOR_DIRECT_RATE_FAST);
+ *
+ * \param manager   the {@link ASensorManager} instance obtained from
+ *                  {@link ASensorManager_getInstanceForPackage}.
+ * \param sensor    a {@link ASensor} to denote which sensor to be operate. It can be NULL if rate
+ *                  is {@link ASENSOR_DIRECT_RATE_STOP}, denoting stopping of all active sensor
+ *                  direct report.
+ * \param channelId channel id (a positive integer) returned from
+ *                  {@link ASensorManager_createSharedMemoryDirectChannel} or
+ *                  {@link ASensorManager_createHardwareBufferDirectChannel}.
+ *
+ * \return positive token for success or negative error code.
+ */
+int ASensorManager_configureDirectReport(
+        ASensorManager* manager, ASensor const* sensor, int channelId, int rate);
+#endif
 
 /*****************************************************************************/
 
 /**
- * Enable the selected sensor with a specified sampling period and max batch report latency.
- * Returns a negative error code on failure.
- * Note: To disable the selected sensor, use ASensorEventQueue_disableSensor() same as before.
+ * Enable the selected sensor with sampling and report parameters
+ *
+ * Enable the selected sensor at a specified sampling period and max batch report latency.
+ * To disable  sensor, use {@link ASensorEventQueue_disableSensor}.
+ *
+ * \param queue {@link ASensorEventQueue} for sensor event to be report to.
+ * \param sensor {@link ASensor} to be enabled.
+ * \param samplingPeriodUs sampling period of sensor in microseconds.
+ * \param maxBatchReportLatencyus maximum time interval between two batch of sensor events are
+ *                                delievered in microseconds. For sensor streaming, set to 0.
+ * \return 0 on success or a negative error code on failure.
  */
 int ASensorEventQueue_registerSensor(ASensorEventQueue* queue, ASensor const* sensor,
-        int32_t samplingPeriodUs, int maxBatchReportLatencyUs);
+        int32_t samplingPeriodUs, int64_t maxBatchReportLatencyUs);
 
 /**
- * Enable the selected sensor. Returns a negative error code on failure.
+ * Enable the selected sensor at default sampling rate.
+ *
+ * Start event reports of a sensor to specified sensor event queue at a default rate.
+ *
+ * \param queue {@link ASensorEventQueue} for sensor event to be report to.
+ * \param sensor {@link ASensor} to be enabled.
+ *
+ * \return 0 on success or a negative error code on failure.
  */
 int ASensorEventQueue_enableSensor(ASensorEventQueue* queue, ASensor const* sensor);
 
 /**
- * Disable the selected sensor. Returns a negative error code on failure.
+ * Disable the selected sensor.
+ *
+ * Stop event reports from the sensor to specified sensor event queue.
+ *
+ * \param queue {@link ASensorEventQueue} to be changed
+ * \param sensor {@link ASensor} to be disabled
+ * \return 0 on success or a negative error code on failure.
  */
 int ASensorEventQueue_disableSensor(ASensorEventQueue* queue, ASensor const* sensor);
 
 /**
  * Sets the delivery rate of events in microseconds for the given sensor.
+ *
+ * This function has to be called after {@link ASensorEventQueue_enableSensor}.
  * Note that this is a hint only, generally event will arrive at a higher
  * rate. It is an error to set a rate inferior to the value returned by
  * ASensor_getMinDelay().
- * Returns a negative error code on failure.
+ *
+ * \param queue {@link ASensorEventQueue} to which sensor event is delivered.
+ * \param sensor {@link ASensor} of which sampling rate to be updated.
+ * \param usec sensor sampling period (1/sampling rate) in microseconds
+ * \return 0 on sucess or a negative error code on failure.
  */
 int ASensorEventQueue_setEventRate(ASensorEventQueue* queue, ASensor const* sensor, int32_t usec);
 
 /**
- * Returns true if there are one or more events available in the
- * sensor queue.  Returns 1 if the queue has events; 0 if
- * it does not have events; and a negative value if there is an error.
+ * Determine if a sensor event queue has pending event to be processed.
+ *
+ * \param queue {@link ASensorEventQueue} to be queried
+ * \return 1 if the queue has events; 0 if it does not have events;
+ *         or a negative value if there is an error.
  */
 int ASensorEventQueue_hasEvents(ASensorEventQueue* queue);
 
 /**
- * Returns the next available events from the queue.  Returns a negative
- * value if no events are available or an error has occurred, otherwise
- * the number of events returned.
+ * Retrieve pending events in sensor event queue
+ *
+ * Retrieve next available events from the queue to a specified event array.
+ *
+ * \param queue {@link ASensorEventQueue} to get events from
+ * \param events pointer to an array of {@link ASensorEvents}.
+ * \param count max number of event that can be filled into array event.
+ * \return number of events returned on success; negative error code when
+ *         no events are pending or an error has occurred.
  *
  * Examples:
- *   ASensorEvent event;
- *   ssize_t numEvent = ASensorEventQueue_getEvents(queue, &event, 1);
  *
- *   ASensorEvent eventBuffer[8];
- *   ssize_t numEvent = ASensorEventQueue_getEvents(queue, eventBuffer, 8);
+ *     ASensorEvent event;
+ *     ssize_t numEvent = ASensorEventQueue_getEvents(queue, &event, 1);
+ *
+ *     ASensorEvent eventBuffer[8];
+ *     ssize_t numEvent = ASensorEventQueue_getEvents(queue, eventBuffer, 8);
  *
  */
-ssize_t ASensorEventQueue_getEvents(ASensorEventQueue* queue,
-                ASensorEvent* events, size_t count);
+ssize_t ASensorEventQueue_getEvents(ASensorEventQueue* queue, ASensorEvent* events, size_t count);
 
 
 /*****************************************************************************/
@@ -501,6 +669,29 @@ int ASensor_getReportingMode(ASensor const* sensor);
  */
 bool ASensor_isWakeUpSensor(ASensor const* sensor);
 #endif /* __ANDROID_API__ >= 21 */
+
+#if __ANDROID_API__ >= __ANDROID_API_O__
+/**
+ * Test if sensor supports a certain type of direct channel.
+ *
+ * \param sensor  a {@link ASensor} to denote the sensor to be checked.
+ * \param channelType  Channel type constant, either
+ *                     {@ASENSOR_DIRECT_CHANNEL_TYPE_SHARED_MEMORY}
+ *                     or {@link ASENSOR_DIRECT_CHANNEL_TYPE_HARDWARE_BUFFER}.
+ * \returns true if sensor supports the specified direct channel type.
+ */
+bool ASensor_isDirectChannelTypeSupported(ASensor const* sensor, int channelType);
+/**
+ * Get the highest direct rate level that a sensor support.
+ *
+ * \param sensor  a {@link ASensor} to denote the sensor to be checked.
+ *
+ * \return a ASENSOR_DIRECT_RATE_... enum denoting the highest rate level supported by the sensor.
+ *         If return value is {@link ASENSOR_DIRECT_RATE_STOP}, it means the sensor
+ *         does not support direct report.
+ */
+int ASensor_getHighestDirectReportRateLevel(ASensor const* sensor);
+#endif
 
 #ifdef __cplusplus
 };

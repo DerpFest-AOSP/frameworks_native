@@ -30,6 +30,7 @@
 #include <EGLUtils.h>
 
 using namespace android;
+extern "C" EGLAPI const char* eglQueryStringImplementationANDROID(EGLDisplay dpy, EGLint name);
 
 static void printGLString(const char *name, GLenum s) {
     // fprintf(stderr, "printGLString %s, %d\n", name, s);
@@ -42,6 +43,12 @@ static void printGLString(const char *name, GLenum s) {
     // else
     //    fprintf(stderr, "GL %s = (null) 0x%08x\n", name, (unsigned int) v);
     fprintf(stderr, "GL %s = %s\n", name, v);
+}
+
+static void printEGLString(EGLDisplay dpy, const char *name, GLenum s) {
+    const char *v = (const char *) eglQueryString(dpy, s);
+    const char* va = (const char*)eglQueryStringImplementationANDROID(dpy, s);
+    fprintf(stderr, "GL %s = %s\nImplementationANDROID: %s\n", name, v, va);
 }
 
 static void checkEglError(const char* op, EGLBoolean returnVal = EGL_TRUE) {
@@ -258,7 +265,7 @@ int printEGLConfigurations(EGLDisplay dpy) {
     return true;
 }
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char** /*argv*/) {
     EGLBoolean returnValue;
     EGLConfig myConfig = {0};
 
@@ -341,6 +348,7 @@ int main(int argc, char** argv) {
     printGLString("Vendor", GL_VENDOR);
     printGLString("Renderer", GL_RENDERER);
     printGLString("Extensions", GL_EXTENSIONS);
+    printEGLString(dpy, "EGL Extensions", EGL_EXTENSIONS);
 
     if(!setupGraphics(w, h)) {
         fprintf(stderr, "Could not set up graphics.\n");

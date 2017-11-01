@@ -33,6 +33,7 @@
 #include <utils/Mutex.h>
 #include <utils/Condition.h>
 
+#include <vector>
 #define CPU_CONSUMER_TEST_FORMAT_RAW 0
 #define CPU_CONSUMER_TEST_FORMAT_Y8 0
 #define CPU_CONSUMER_TEST_FORMAT_Y16 0
@@ -309,8 +310,6 @@ void checkGreyscaleBuffer(const CpuConsumer::LockedBuffer &buf) {
     uint32_t h = buf.height;
     const int blockWidth = w > 16 ? w / 16 : 1;
     const int blockHeight = h > 16 ? h / 16 : 1;
-    const int blockRows = h / blockHeight;
-    const int blockCols = w / blockWidth;
 
     // Top-left square is bright
     checkPixel(buf, 0, 0, 191);
@@ -348,8 +347,6 @@ void checkRgba8888Buffer(const CpuConsumer::LockedBuffer &buf) {
     uint32_t h = buf.height;
     const int blockWidth = w > 16 ? w / 16 : 1;
     const int blockHeight = h > 16 ? h / 16 : 1;
-    const int blockRows = h / blockHeight;
-    const int blockCols = w / blockWidth;
 
     // Top-left square is bright red
     checkPixel(buf, 0, 0, 191, 63, 63);
@@ -391,8 +388,6 @@ void checkBayerRawBuffer(const CpuConsumer::LockedBuffer &buf) {
     uint32_t h = buf.height;
     const int blockWidth = (w > 16 ? w / 8 : 2) & ~0x1;
     const int blockHeight = (h > 16 ? h / 8 : 2) & ~0x1;
-    const int blockRows = h / blockHeight;
-    const int blockCols = w / blockWidth;
 
     // Top-left square is red
     checkPixel(buf, 0, 0, 1000, 200, 200);
@@ -490,7 +485,7 @@ void produceOneFrame(const sp<ANativeWindow>& anw,
 
     ASSERT_TRUE(anb != NULL);
 
-    sp<GraphicBuffer> buf(new GraphicBuffer(anb, false));
+    sp<GraphicBuffer> buf(GraphicBuffer::from(anb));
 
     *stride = buf->getStride();
     uint8_t* img = NULL;
@@ -635,7 +630,7 @@ TEST_P(CpuConsumerTest, FromCpuLockMax) {
 
     // Consume
 
-    CpuConsumer::LockedBuffer *b = new CpuConsumer::LockedBuffer[params.maxLockedBuffers];
+    std::vector<CpuConsumer::LockedBuffer> b(params.maxLockedBuffers);
     for (int i = 0; i < params.maxLockedBuffers; i++) {
         ALOGV("Locking frame %d", i);
         err = mCC->lockNextBuffer(&b[i]);
@@ -684,9 +679,6 @@ TEST_P(CpuConsumerTest, FromCpuLockMax) {
     for (int i = 1; i < params.maxLockedBuffers; i++) {
         mCC->unlockBuffer(b[i]);
     }
-
-    delete[] b;
-
 }
 
 CpuConsumerTestParams y8TestSets[] = {

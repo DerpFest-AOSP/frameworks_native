@@ -1,4 +1,0 @@
-cc_library_static {
-    name: "libdumpstate.default",
-    srcs: ["libdumpstate_default.cpp"],
-}

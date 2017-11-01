@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <android-base/logging.h>
 #include <gtest/gtest.h>
 
 #include "InstalldNativeService.h"
@@ -27,23 +28,17 @@
 #define LOG_TAG "utils_test"
 
 #define TEST_DATA_DIR "/data/"
+#define TEST_ROOT_DIR "/system/"
 #define TEST_APP_DIR "/data/app/"
 #define TEST_APP_PRIVATE_DIR "/data/app-private/"
+#define TEST_APP_EPHEMERAL_DIR "/data/app-ephemeral/"
 #define TEST_ASEC_DIR "/mnt/asec/"
 #define TEST_EXPAND_DIR "/mnt/expand/"
 
 #define TEST_SYSTEM_DIR1 "/system/app/"
 #define TEST_SYSTEM_DIR2 "/vendor/app/"
 
-#define REALLY_LONG_APP_NAME "com.example." \
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa." \
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa." \
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
-#define REALLY_LONG_LEAF_NAME "shared_prefs_shared_prefs_shared_prefs_shared_prefs_shared_prefs_" \
-        "shared_prefs_shared_prefs_shared_prefs_shared_prefs_shared_prefs_shared_prefs_" \
-        "shared_prefs_shared_prefs_shared_prefs_shared_prefs_shared_prefs_shared_prefs_" \
-        "shared_prefs_shared_prefs_shared_prefs_shared_prefs_shared_prefs_shared_prefs_"
+#define TEST_PROFILE_DIR "/data/misc/profiles"
 
 namespace android {
 namespace installd {
@@ -51,33 +46,21 @@ namespace installd {
 class UtilsTest : public testing::Test {
 protected:
     virtual void SetUp() {
-        android_app_dir.path = (char*) TEST_APP_DIR;
-        android_app_dir.len = strlen(TEST_APP_DIR);
+        setenv("ANDROID_LOG_TAGS", "*:v", 1);
+        android::base::InitLogging(nullptr);
 
-        android_app_private_dir.path = (char*) TEST_APP_PRIVATE_DIR;
-        android_app_private_dir.len = strlen(TEST_APP_PRIVATE_DIR);
-
-        android_data_dir.path = (char*) TEST_DATA_DIR;
-        android_data_dir.len = strlen(TEST_DATA_DIR);
-
-        android_asec_dir.path = (char*) TEST_ASEC_DIR;
-        android_asec_dir.len = strlen(TEST_ASEC_DIR);
-
-        android_mnt_expand_dir.path = (char*) TEST_EXPAND_DIR;
-        android_mnt_expand_dir.len = strlen(TEST_EXPAND_DIR);
-
-        android_system_dirs.count = 2;
-
-        android_system_dirs.dirs = (dir_rec_t*) calloc(android_system_dirs.count, sizeof(dir_rec_t));
-        android_system_dirs.dirs[0].path = (char*) TEST_SYSTEM_DIR1;
-        android_system_dirs.dirs[0].len = strlen(TEST_SYSTEM_DIR1);
-
-        android_system_dirs.dirs[1].path = (char*) TEST_SYSTEM_DIR2;
-        android_system_dirs.dirs[1].len = strlen(TEST_SYSTEM_DIR2);
+        init_globals_from_data_and_root(TEST_DATA_DIR, TEST_ROOT_DIR);
     }
 
     virtual void TearDown() {
-        free(android_system_dirs.dirs);
+    }
+
+    std::string create_too_long_path(const std::string& seed) {
+        std::string result = seed;
+        for (size_t i = seed.size(); i < PKG_PATH_MAX; i++) {
+            result += "a";
+        }
+        return result;
     }
 };
 
@@ -85,19 +68,19 @@ TEST_F(UtilsTest, IsValidApkPath_BadPrefix) {
     // Bad prefixes directories
     const char *badprefix1 = "/etc/passwd";
     EXPECT_EQ(-1, validate_apk_path(badprefix1))
-            << badprefix1 << " should be allowed as a valid path";
+            << badprefix1 << " should not be allowed as a valid path";
 
     const char *badprefix2 = "../.." TEST_APP_DIR "../../../blah";
     EXPECT_EQ(-1, validate_apk_path(badprefix2))
-            << badprefix2 << " should be allowed as a valid path";
+            << badprefix2 << " should not be allowed as a valid path";
 
     const char *badprefix3 = "init.rc";
     EXPECT_EQ(-1, validate_apk_path(badprefix3))
-            << badprefix3 << " should be allowed as a valid path";
+            << badprefix3 << " should not be allowed as a valid path";
 
     const char *badprefix4 = "/init.rc";
     EXPECT_EQ(-1, validate_apk_path(badprefix4))
-            << badprefix4 << " should be allowed as a valid path";
+            << badprefix4 << " should not be allowed as a valid path";
 }
 
 TEST_F(UtilsTest, IsValidApkPath_Internal) {
@@ -185,12 +168,6 @@ TEST_F(UtilsTest, IsValidApkPath_EscapeFail) {
             << badasec1 << " should be rejected as a invalid path";
 }
 
-TEST_F(UtilsTest, IsValidApkPath_DoubleSlashFail) {
-    const char *badasec2 = TEST_ASEC_DIR "com.example.asec//pkg.apk";
-    EXPECT_EQ(-1, validate_apk_path(badasec2))
-            << badasec2 << " should be rejected as a invalid path";
-}
-
 TEST_F(UtilsTest, IsValidApkPath_SubdirEscapeFail) {
     const char *badasec3 = TEST_ASEC_DIR "com.example.asec/../../../pkg.apk";
     EXPECT_EQ(-1, validate_apk_path(badasec3))
@@ -269,195 +246,6 @@ TEST_F(UtilsTest, CheckSystemApp_Subdir) {
             << badapp2 << " should be rejected not a system path";
 }
 
-TEST_F(UtilsTest, GetPathFromString_NullPathFail) {
-    dir_rec_t test1;
-    EXPECT_EQ(-1, get_path_from_string(&test1, (const char *) NULL))
-            << "Should not allow NULL as a path.";
-}
-
-TEST_F(UtilsTest, GetPathFromString_EmptyPathFail) {
-    dir_rec_t test1;
-    EXPECT_EQ(-1, get_path_from_string(&test1, ""))
-            << "Should not allow empty paths.";
-}
-
-TEST_F(UtilsTest, GetPathFromString_RelativePathFail) {
-    dir_rec_t test1;
-    EXPECT_EQ(-1, get_path_from_string(&test1, "mnt/asec"))
-            << "Should not allow relative paths.";
-}
-
-TEST_F(UtilsTest, GetPathFromString_NonCanonical) {
-    dir_rec_t test1;
-
-    EXPECT_EQ(0, get_path_from_string(&test1, "/mnt/asec"))
-            << "Should be able to canonicalize directory /mnt/asec";
-    EXPECT_STREQ("/mnt/asec/", test1.path)
-            << "/mnt/asec should be canonicalized to /mnt/asec/";
-    EXPECT_EQ(10, (ssize_t) test1.len)
-            << "path len should be equal to the length of /mnt/asec/ (10)";
-    free(test1.path);
-}
-
-TEST_F(UtilsTest, GetPathFromString_CanonicalPath) {
-    dir_rec_t test3;
-    EXPECT_EQ(0, get_path_from_string(&test3, "/data/app/"))
-            << "Should be able to canonicalize directory /data/app/";
-    EXPECT_STREQ("/data/app/", test3.path)
-            << "/data/app/ should be canonicalized to /data/app/";
-    EXPECT_EQ(10, (ssize_t) test3.len)
-            << "path len should be equal to the length of /data/app/ (10)";
-    free(test3.path);
-}
-
-TEST_F(UtilsTest, CreatePkgPath_LongPkgNameSuccess) {
-    char path[PKG_PATH_MAX];
-
-    // Create long packagename of "aaaaa..."
-    size_t pkgnameSize = PKG_NAME_MAX;
-    char pkgname[pkgnameSize + 1];
-    memset(pkgname, 'a', pkgnameSize);
-    pkgname[pkgnameSize] = '\0';
-
-    EXPECT_EQ(0, create_pkg_path(path, pkgname, "", 0))
-            << "Should successfully be able to create package name.";
-
-    std::string prefix = std::string(TEST_DATA_DIR) + PRIMARY_USER_PREFIX;
-    size_t offset = prefix.length();
-
-    EXPECT_STREQ(pkgname, path + offset)
-             << "Package path should be a really long string of a's";
-}
-
-TEST_F(UtilsTest, CreatePkgPath_LongPkgNameFail) {
-    char path[PKG_PATH_MAX];
-
-    // Create long packagename of "aaaaa..."
-    size_t pkgnameSize = PKG_NAME_MAX + 1;
-    char pkgname[pkgnameSize + 1];
-    memset(pkgname, 'a', pkgnameSize);
-    pkgname[pkgnameSize] = '\0';
-
-    EXPECT_EQ(-1, create_pkg_path(path, pkgname, "", 0))
-            << "Should return error because package name is too long.";
-}
-
-TEST_F(UtilsTest, CreatePkgPath_LongPostfixFail) {
-    char path[PKG_PATH_MAX];
-
-    // Create long packagename of "aaaaa..."
-    size_t postfixSize = PKG_PATH_MAX;
-    char postfix[postfixSize + 1];
-    memset(postfix, 'a', postfixSize);
-    postfix[postfixSize] = '\0';
-
-    EXPECT_EQ(-1, create_pkg_path(path, "com.example.package", postfix, 0))
-            << "Should return error because postfix is too long.";
-}
-
-TEST_F(UtilsTest, CreatePkgPath_PrimaryUser) {
-    char path[PKG_PATH_MAX];
-
-    EXPECT_EQ(0, create_pkg_path(path, "com.example.package", "", 0))
-            << "Should return error because postfix is too long.";
-
-    std::string p = std::string(TEST_DATA_DIR)
-                    + PRIMARY_USER_PREFIX
-                    + "com.example.package";
-    EXPECT_STREQ(p.c_str(), path)
-            << "Package path should be in /data/data/";
-}
-
-TEST_F(UtilsTest, CreatePkgPath_SecondaryUser) {
-    char path[PKG_PATH_MAX];
-
-    EXPECT_EQ(0, create_pkg_path(path, "com.example.package", "", 1))
-            << "Should successfully create package path.";
-
-    std::string p = std::string(TEST_DATA_DIR)
-                    + SECONDARY_USER_PREFIX
-                    + "1/com.example.package";
-    EXPECT_STREQ(p.c_str(), path)
-            << "Package path should be in /data/user/";
-}
-
-TEST_F(UtilsTest, CreateMovePath_Primary) {
-    char path[PKG_PATH_MAX];
-
-    EXPECT_EQ(0, create_move_path(path, "com.android.test", "shared_prefs", 0))
-            << "Should be able to create move path for primary user";
-
-    EXPECT_STREQ("/data/data/com.android.test/shared_prefs", path)
-            << "Primary user package directory should be created correctly";
-}
-
-TEST_F(UtilsTest, CreateMovePath_Fail_AppTooLong) {
-    char path[PKG_PATH_MAX];
-
-    EXPECT_EQ(-1, create_move_path(path, REALLY_LONG_APP_NAME, "shared_prefs", 0))
-            << "Should fail to create move path for primary user";
-}
-
-TEST_F(UtilsTest, CreateMovePath_Fail_LeafTooLong) {
-    char path[PKG_PATH_MAX];
-
-    EXPECT_EQ(-1, create_move_path(path, "com.android.test", REALLY_LONG_LEAF_NAME, 0))
-            << "Should fail to create move path for primary user";
-}
-
-TEST_F(UtilsTest, CopyAndAppend_Normal) {
-    //int copy_and_append(dir_rec_t* dst, dir_rec_t* src, char* suffix)
-    dir_rec_t dst;
-    dir_rec_t src;
-
-    src.path = (char*) "/data/";
-    src.len = strlen(src.path);
-
-    EXPECT_EQ(0, copy_and_append(&dst, &src, "app/"))
-            << "Should return error because postfix is too long.";
-
-    EXPECT_STREQ("/data/app/", dst.path)
-            << "Appended path should be correct";
-
-    EXPECT_EQ(10, (ssize_t) dst.len)
-            << "Appended path should be length of '/data/app/' (10)";
-}
-
-TEST_F(UtilsTest, AppendAndIncrement_Normal) {
-    size_t dst_size = 10;
-    char dst[dst_size];
-    char *dstp = dst;
-    const char* src = "FOO";
-
-    EXPECT_EQ(0, append_and_increment(&dstp, src, &dst_size))
-            << "String should append successfully";
-
-    EXPECT_STREQ("FOO", dst)
-            << "String should append correctly";
-
-    EXPECT_EQ(0, append_and_increment(&dstp, src, &dst_size))
-            << "String should append successfully again";
-
-    EXPECT_STREQ("FOOFOO", dst)
-            << "String should append correctly again";
-}
-
-TEST_F(UtilsTest, AppendAndIncrement_TooBig) {
-    size_t dst_size = 5;
-    char dst[dst_size];
-    char *dstp = dst;
-    const char* src = "FOO";
-
-    EXPECT_EQ(0, append_and_increment(&dstp, src, &dst_size))
-            << "String should append successfully";
-
-    EXPECT_STREQ("FOO", dst)
-            << "String should append correctly";
-
-    EXPECT_EQ(-1, append_and_increment(&dstp, src, &dst_size))
-            << "String should fail because it's too large to fit";
-}
-
 TEST_F(UtilsTest, CreateDataPath) {
     EXPECT_EQ("/data", create_data_path(nullptr));
     EXPECT_EQ("/mnt/expand/57f8f4bc-abf4-655f-bf67-946fc0f9f25b",
@@ -506,6 +294,179 @@ TEST_F(UtilsTest, CreateDataUserPackagePath) {
             create_data_user_ce_package_path("57f8f4bc-abf4-655f-bf67-946fc0f9f25b", 0, "com.example"));
     EXPECT_EQ("/mnt/expand/57f8f4bc-abf4-655f-bf67-946fc0f9f25b/user/10/com.example",
             create_data_user_ce_package_path("57f8f4bc-abf4-655f-bf67-946fc0f9f25b", 10, "com.example"));
+}
+
+TEST_F(UtilsTest, IsValidPackageName) {
+    EXPECT_EQ(true, is_valid_package_name("android"));
+    EXPECT_EQ(true, is_valid_package_name("com.example"));
+    EXPECT_EQ(true, is_valid_package_name("com.example-1"));
+    EXPECT_EQ(true, is_valid_package_name("com.example-1024"));
+    EXPECT_EQ(true, is_valid_package_name("com.example.foo---KiJFj4a_tePVw95pSrjg=="));
+    EXPECT_EQ(true, is_valid_package_name("really_LONG.a1234.package_name"));
+
+    EXPECT_EQ(false, is_valid_package_name("1234.package"));
+    EXPECT_EQ(false, is_valid_package_name("com.1234.package"));
+    EXPECT_EQ(false, is_valid_package_name(""));
+    EXPECT_EQ(false, is_valid_package_name("."));
+    EXPECT_EQ(false, is_valid_package_name(".."));
+    EXPECT_EQ(false, is_valid_package_name("../"));
+    EXPECT_EQ(false, is_valid_package_name("com.example/../com.evil/"));
+    EXPECT_EQ(false, is_valid_package_name("com.example-1/../com.evil/"));
+    EXPECT_EQ(false, is_valid_package_name("/com.evil"));
+}
+
+TEST_F(UtilsTest, CreateDataUserProfilePath) {
+    EXPECT_EQ("/data/misc/profiles/cur/0", create_primary_cur_profile_dir_path(0));
+    EXPECT_EQ("/data/misc/profiles/cur/1", create_primary_cur_profile_dir_path(1));
+}
+
+TEST_F(UtilsTest, CreateDataUserProfilePackagePath) {
+    EXPECT_EQ("/data/misc/profiles/cur/0/com.example",
+            create_primary_current_profile_package_dir_path(0, "com.example"));
+    EXPECT_EQ("/data/misc/profiles/cur/1/com.example",
+            create_primary_current_profile_package_dir_path(1, "com.example"));
+}
+
+TEST_F(UtilsTest, CreateDataRefProfilePath) {
+    EXPECT_EQ("/data/misc/profiles/ref", create_primary_ref_profile_dir_path());
+}
+
+TEST_F(UtilsTest, CreateDataRefProfilePackagePath) {
+    EXPECT_EQ("/data/misc/profiles/ref/com.example",
+        create_primary_reference_profile_package_dir_path("com.example"));
+}
+
+TEST_F(UtilsTest, CreatePrimaryCurrentProfile) {
+    std::string expected =
+        create_primary_current_profile_package_dir_path(0, "com.example") + "/primary.prof";
+    EXPECT_EQ(expected,
+            create_current_profile_path(/*user*/0, "com.example", /*is_secondary*/false));
+}
+
+TEST_F(UtilsTest, CreatePrimaryReferenceProfile) {
+    std::string expected =
+        create_primary_reference_profile_package_dir_path("com.example") + "/primary.prof";
+    EXPECT_EQ(expected,
+            create_reference_profile_path("com.example", /*is_secondary*/false));
+}
+
+TEST_F(UtilsTest, CreateSecondaryCurrentProfile) {
+    EXPECT_EQ("/data/user/0/com.example/oat/secondary.dex.cur.prof",
+            create_current_profile_path(/*user*/0,
+                    "/data/user/0/com.example/secondary.dex", /*is_secondary*/true));
+}
+
+TEST_F(UtilsTest, CreateSecondaryReferenceProfile) {
+    EXPECT_EQ("/data/user/0/com.example/oat/secondary.dex.prof",
+            create_reference_profile_path(
+                    "/data/user/0/com.example/secondary.dex", /*is_secondary*/true));
+}
+
+static void pass_secondary_dex_validation(const std::string& package_name,
+        const std::string& dex_path, int uid, int storage_flag) {
+    EXPECT_TRUE(validate_secondary_dex_path(package_name, dex_path, /*volume_uuid*/ nullptr, uid,
+            storage_flag))
+            << dex_path << " should be allowed as a valid secondary dex path";
+}
+
+static void fail_secondary_dex_validation(const std::string& package_name,
+        const std::string& dex_path, int uid, int storage_flag) {
+    EXPECT_FALSE(validate_secondary_dex_path(package_name, dex_path, /*volume_uuid*/ nullptr, uid,
+            storage_flag))
+            << dex_path << " should not be allowed as a valid secondary dex path";
+}
+
+TEST_F(UtilsTest, ValidateSecondaryDexFilesPath) {
+    std::string package_name = "com.test.app";
+    std::string app_dir_ce_user_0 = "/data/data/" + package_name;
+    std::string app_dir_ce_user_10 = "/data/user/10/" + package_name;
+
+    std::string app_dir_de_user_0 = "/data/user_de/0/" + package_name;
+    std::string app_dir_de_user_10 = "/data/user_de/10/" + package_name;
+
+    EXPECT_EQ(app_dir_ce_user_0,
+            create_data_user_ce_package_path(nullptr, 0, package_name.c_str()));
+    EXPECT_EQ(app_dir_ce_user_10,
+            create_data_user_ce_package_path(nullptr, 10, package_name.c_str()));
+
+    EXPECT_EQ(app_dir_de_user_0,
+            create_data_user_de_package_path(nullptr, 0, package_name.c_str()));
+    EXPECT_EQ(app_dir_de_user_10,
+            create_data_user_de_package_path(nullptr, 10, package_name.c_str()));
+
+    uid_t app_uid_for_user_0 = multiuser_get_uid(/*user_id*/0, /*app_id*/ 1234);
+    uid_t app_uid_for_user_10 = multiuser_get_uid(/*user_id*/10, /*app_id*/ 1234);
+
+    // Standard path for user 0 on CE storage.
+    pass_secondary_dex_validation(
+        package_name, app_dir_ce_user_0 + "/ce0.dex", app_uid_for_user_0, FLAG_STORAGE_CE);
+    // Standard path for user 10 on CE storage.
+    pass_secondary_dex_validation(
+        package_name, app_dir_ce_user_10 + "/ce10.dex", app_uid_for_user_10, FLAG_STORAGE_CE);
+
+    // Standard path for user 0 on DE storage.
+    pass_secondary_dex_validation(
+        package_name, app_dir_de_user_0 + "/de0.dex", app_uid_for_user_0, FLAG_STORAGE_DE);
+    // Standard path for user 10 on DE storage.
+    pass_secondary_dex_validation(
+        package_name, app_dir_de_user_10 + "/de0.dex", app_uid_for_user_10, FLAG_STORAGE_DE);
+
+    // Dex path for user 0 accessed from user 10.
+    fail_secondary_dex_validation(
+        package_name, app_dir_ce_user_0 + "/path0_from10.dex",
+        app_uid_for_user_10, FLAG_STORAGE_CE);
+
+    // Dex path for CE storage accessed with DE.
+    fail_secondary_dex_validation(
+        package_name, app_dir_ce_user_0 + "/ce_from_de.dex", app_uid_for_user_0, FLAG_STORAGE_DE);
+
+    // Dex path for DE storage accessed with CE.
+    fail_secondary_dex_validation(
+        package_name, app_dir_de_user_0 + "/de_from_ce.dex", app_uid_for_user_0, FLAG_STORAGE_CE);
+
+    // Location which does not start with '/'.
+    fail_secondary_dex_validation(
+        package_name, "without_slash.dex", app_uid_for_user_10, FLAG_STORAGE_DE);
+
+    // The dex file is not in the specified package directory.
+    fail_secondary_dex_validation(
+        "another.package", app_dir_ce_user_0 + "/for_another_package.dex",
+        app_uid_for_user_0, FLAG_STORAGE_DE);
+
+    // The dex path contains indirect directories.
+    fail_secondary_dex_validation(
+        package_name, app_dir_ce_user_0 + "/1/../foo.dex", app_uid_for_user_0, FLAG_STORAGE_CE);
+    fail_secondary_dex_validation(
+        package_name, app_dir_ce_user_0 + "/1/./foo.dex", app_uid_for_user_0, FLAG_STORAGE_CE);
+
+    // Super long path.
+    std::string too_long = create_too_long_path("too_long_");
+    fail_secondary_dex_validation(
+        package_name, app_dir_ce_user_10 + "/" + too_long, app_uid_for_user_10, FLAG_STORAGE_CE);
+}
+
+TEST_F(UtilsTest, ValidateApkPath) {
+    EXPECT_EQ(0, validate_apk_path("/data/app/com.example"));
+    EXPECT_EQ(0, validate_apk_path("/data/app/com.example/file"));
+    EXPECT_EQ(0, validate_apk_path("/data/app/com.example//file"));
+    EXPECT_NE(0, validate_apk_path("/data/app/com.example/dir/"));
+    EXPECT_NE(0, validate_apk_path("/data/app/com.example/dir/file"));
+    EXPECT_NE(0, validate_apk_path("/data/app/com.example/dir/dir/file"));
+    EXPECT_NE(0, validate_apk_path("/data/app/com.example/dir/dir//file"));
+    EXPECT_NE(0, validate_apk_path("/data/app/com.example/dir/dir/dir/file"));
+    EXPECT_NE(0, validate_apk_path("/data/app/com.example/dir/dir/dir//file"));
+}
+
+TEST_F(UtilsTest, ValidateApkPathSubdirs) {
+    EXPECT_EQ(0, validate_apk_path_subdirs("/data/app/com.example"));
+    EXPECT_EQ(0, validate_apk_path_subdirs("/data/app/com.example/file"));
+    EXPECT_EQ(0, validate_apk_path_subdirs("/data/app/com.example//file"));
+    EXPECT_EQ(0, validate_apk_path_subdirs("/data/app/com.example/dir/"));
+    EXPECT_EQ(0, validate_apk_path_subdirs("/data/app/com.example/dir/file"));
+    EXPECT_EQ(0, validate_apk_path_subdirs("/data/app/com.example/dir/dir/file"));
+    EXPECT_EQ(0, validate_apk_path_subdirs("/data/app/com.example/dir/dir//file"));
+    EXPECT_NE(0, validate_apk_path_subdirs("/data/app/com.example/dir/dir/dir/file"));
+    EXPECT_NE(0, validate_apk_path_subdirs("/data/app/com.example/dir/dir/dir//file"));
 }
 
 }  // namespace installd
