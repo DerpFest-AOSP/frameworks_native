@@ -1,4 +1,7 @@
 
+header_libraries = [
+    "libdvr_headers",
+]
 
 shared_libraries = [
     "libbase",
@@ -21,6 +24,7 @@ static_libraries = [
 
 cc_test {
     srcs: ["buffer_hub_queue-test.cpp"],
+    header_libs: header_libraries,
     static_libs: static_libraries,
     shared_libs: shared_libraries,
     cflags: [
@@ -28,6 +32,9 @@ cc_test {
         "-DTRACE=0",
         "-O0",
         "-g",
+        "-Wall",
+        "-Werror",
+        "-Wno-error=sign-compare", // to fix later
     ],
     name: "buffer_hub_queue-test",
     tags: ["optional"],
@@ -35,6 +42,7 @@ cc_test {
 
 cc_test {
     srcs: ["buffer_hub_queue_producer-test.cpp"],
+    header_libs: header_libraries,
     static_libs: static_libraries,
     shared_libs: shared_libraries,
     cflags: [
@@ -42,6 +50,8 @@ cc_test {
         "-DTRACE=0",
         "-O0",
         "-g",
+        "-Wall",
+        "-Werror",
     ],
     name: "buffer_hub_queue_producer-test",
     tags: ["optional"],

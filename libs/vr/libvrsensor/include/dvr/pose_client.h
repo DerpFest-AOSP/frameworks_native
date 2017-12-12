@@ -7,7 +7,7 @@
 #ifndef __FLOAT32X4T_86
 #define __FLOAT32X4T_86
 typedef float float32x4_t __attribute__ ((__vector_size__ (16)));
-typedef struct float32x4x4_t { float32x4_t val[4]; };
+typedef struct float32x4x4_t { float32x4_t val[4]; } float32x4x4_t;
 #endif
 #endif
 
@@ -156,6 +156,18 @@ int dvrPoseClientGetRingBuffer(DvrPoseClient* client,
 // @param enabled Whether sensors are enabled or disabled.
 // @return Zero on success
 int dvrPoseClientSensorsEnable(DvrPoseClient* client, bool enabled);
+
+// Requests a burst of data samples from pose service. The data samples are
+// passed through a shared memory buffer obtained by calling
+// dvrPoseClientGetDataReader().
+//
+// @param DvrPoseDataCaptureRequest Parameters on how to capture data.
+// @return Zero on success.
+int dvrPoseClientDataCapture(DvrPoseClient* client,
+                             const DvrPoseDataCaptureRequest* request);
+
+// Destroys the write buffer queue for the given |data_type|.
+int dvrPoseClientDataReaderDestroy(DvrPoseClient* client, uint64_t data_type);
 
 #ifdef __cplusplus
 }  // extern "C"

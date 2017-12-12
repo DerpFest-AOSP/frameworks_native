@@ -65,7 +65,7 @@ using namespace android::hardware::configstore;
 using namespace android::hardware::configstore::V1_0;
 
 static bool useTripleFramebuffer = getInt64< ISurfaceFlingerConfigs,
-        &ISurfaceFlingerConfigs::maxFrameBufferAcquiredBuffers>(2) == 3;
+        &ISurfaceFlingerConfigs::maxFrameBufferAcquiredBuffers>(2) >= 3;
 
 #if !defined(EGL_EGLEXT_PROTOTYPES) || !defined(EGL_ANDROID_swap_rectangle)
 // Dummy implementation in case it is missing.
@@ -134,9 +134,11 @@ DisplayDevice::DisplayDevice(
     EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (config == EGL_NO_CONFIG) {
 #ifdef USE_HWC2
-        config = RenderEngine::chooseEglConfig(display, PIXEL_FORMAT_RGBA_8888);
+        config = RenderEngine::chooseEglConfig(display, PIXEL_FORMAT_RGBA_8888,
+                                               /*logConfig*/ false);
 #else
-        config = RenderEngine::chooseEglConfig(display, format);
+        config = RenderEngine::chooseEglConfig(display, format,
+                                               /*logConfig*/ false);
 #endif
     }
     eglSurface = eglCreateWindowSurface(display, config, window, NULL);
@@ -397,6 +399,14 @@ void DisplayDevice::setVisibleLayersSortedByZ(const Vector< sp<Layer> >& layers)
 
 const Vector< sp<Layer> >& DisplayDevice::getVisibleLayersSortedByZ() const {
     return mVisibleLayersSortedByZ;
+}
+
+void DisplayDevice::setLayersNeedingFences(const Vector< sp<Layer> >& layers) {
+    mLayersNeedingFences = layers;
+}
+
+const Vector< sp<Layer> >& DisplayDevice::getLayersNeedingFences() const {
+    return mLayersNeedingFences;
 }
 
 Region DisplayDevice::getDirtyRegion(bool repaintEverything) const {
