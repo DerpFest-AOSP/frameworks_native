@@ -1947,6 +1947,7 @@ void Layer::deferTransactionUntil(const sp<Layer>& barrierLayer,
     mCurrentState.barrierLayer = nullptr;
     mCurrentState.frameNumber = 0;
     mCurrentState.modified = false;
+    ALOGE("Deferred transaction");
 }
 
 void Layer::deferTransactionUntil(const sp<IBinder>& barrierHandle,
@@ -2682,7 +2683,7 @@ Transform Layer::getTransform() const {
         // for in the transform. We need to mirror this scaling in child surfaces
         // or we will break the contract where WM can treat child surfaces as
         // pixels in the parent surface.
-        if (p->isFixedSize() && p->mActiveBuffer != nullptr) {
+        if (p->isFixedSize()) {
             int bufferWidth;
             int bufferHeight;
             if ((p->mCurrentTransform & NATIVE_WINDOW_TRANSFORM_ROT_90) == 0) {
