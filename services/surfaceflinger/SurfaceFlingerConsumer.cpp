@@ -240,15 +240,10 @@ void SurfaceFlingerConsumer::setContentsChangedListener(
 }
 
 void SurfaceFlingerConsumer::onSidebandStreamChanged() {
-    FrameAvailableListener* unsafeFrameAvailableListener = nullptr;
-    {
-        Mutex::Autolock lock(mFrameAvailableMutex);
-        unsafeFrameAvailableListener = mFrameAvailableListener.unsafe_get();
-    }
     sp<ContentsChangedListener> listener;
     {   // scope for the lock
         Mutex::Autolock lock(mMutex);
-        ALOG_ASSERT(unsafeFrameAvailableListener == mContentsChangedListener.unsafe_get());
+        ALOG_ASSERT(mFrameAvailableListener.unsafe_get() == mContentsChangedListener.unsafe_get());
         listener = mContentsChangedListener.promote();
     }
 
