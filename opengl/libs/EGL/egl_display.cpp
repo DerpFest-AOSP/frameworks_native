@@ -42,7 +42,8 @@ namespace android {
 // ----------------------------------------------------------------------------
 
 static char const * const sVendorString     = "Android";
-static char const * const sVersionString    = "1.4 Android META-EGL";
+static char const * const sVersionString14    = "1.4 Android META-EGL";
+static char const * const sVersionString15    = "1.5 Android META-EGL";
 static char const * const sClientApiString  = "OpenGL_ES";
 
 extern char const * const gBuiltinExtensionString;
@@ -115,49 +116,123 @@ bool egl_display_t::getObject(egl_object_t* object) const {
     return false;
 }
 
-EGLDisplay egl_display_t::getFromNativeDisplay(EGLNativeDisplayType disp) {
+EGLDisplay egl_display_t::getFromNativeDisplay(EGLNativeDisplayType disp,
+                                               const EGLAttrib* attrib_list) {
     if (uintptr_t(disp) >= NUM_DISPLAYS)
         return NULL;
 
-    return sDisplay[uintptr_t(disp)].getDisplay(disp);
+    return sDisplay[uintptr_t(disp)].getPlatformDisplay(disp, attrib_list);
 }
 
-EGLDisplay getDisplayAngle(EGLNativeDisplayType display, egl_connection_t* const cnx) {
+static void addAnglePlatformAttributes(egl_connection_t* const cnx, const EGLAttrib* attrib_list,
+                                       std::vector<EGLAttrib>& attrs) {
+    intptr_t vendorEGL = (intptr_t)cnx->vendorEGL;
 
+    EGLint angleBackendDefault = EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE;
+    if (attrib_list) {
+        while (*attrib_list != EGL_NONE) {
+            EGLAttrib attr = *attrib_list++;
+            EGLAttrib value = *attrib_list++;
+            if (attr == EGL_PLATFORM_ANGLE_TYPE_ANGLE) {
+                switch (value) {
+                    case EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE:
+                    case EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE:
+                    case EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE:
+                        angleBackendDefault = value;
+                        break;
+                    default:
+                        ALOGW("Invalid EGL_PLATFORM_ANGLE_TYPE_ANGLE attribute: 0x%" PRIxPTR,
+                              value);
+                        break;
+                }
+            }
+        }
+    }
+
+    cnx->angleBackend = angleBackendDefault;
+
+    // Allow debug property to override application's
+    char prop[PROPERTY_VALUE_MAX];
+    property_get("debug.angle.backend", prop, "0");
+    switch (atoi(prop)) {
+        case 1:
+            ALOGV("addAnglePlatformAttributes: Requesting Default back-end");
+            cnx->angleBackend = EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE;
+            break;
+        case 2:
+            ALOGV("addAnglePlatformAttributes: Requesting Vulkan back-end");
+            cnx->angleBackend = EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE;
+            break;
+        case 3:
+            ALOGV("addAnglePlatformAttributes: Requesting OpenGLES back-end");
+            cnx->angleBackend = EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE;
+            break;
+        default:
+            break;
+    }
+
+    attrs.reserve(4 * 2);
+
+    attrs.push_back(EGL_PLATFORM_ANGLE_TYPE_ANGLE);
+    attrs.push_back(cnx->angleBackend);
+
+    switch (cnx->angleBackend) {
+        case EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE:
+            ALOGV("%s: Requesting Vulkan ANGLE back-end", __FUNCTION__);
+            property_get("debug.angle.validation", prop, "0");
+            attrs.push_back(EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED_ANGLE);
+            attrs.push_back(atoi(prop));
+            break;
+        case EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE:
+            ALOGV("%s: Requesting Default ANGLE back-end", __FUNCTION__);
+            break;
+        case EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE:
+            ALOGV("%s: Requesting OpenGL ES ANGLE back-end", __FUNCTION__);
+            // NOTE: This is only valid if the backend is OpenGL
+            attrs.push_back(EGL_PLATFORM_ANGLE_EGL_HANDLE_ANGLE);
+            attrs.push_back(vendorEGL);
+            break;
+        default:
+            ALOGV("%s: Requesting Unknown (%d) ANGLE back-end", __FUNCTION__, cnx->angleBackend);
+            break;
+    }
+    attrs.push_back(EGL_PLATFORM_ANGLE_CONTEXT_VIRTUALIZATION_ANGLE);
+    attrs.push_back(EGL_FALSE);
+}
+
+static EGLDisplay getPlatformDisplayAngle(EGLNativeDisplayType display, egl_connection_t* const cnx,
+                                          const EGLAttrib* attrib_list) {
     EGLDisplay dpy = EGL_NO_DISPLAY;
 
-    // Locally define this until EGL 1.5 is supported
-    typedef EGLDisplay (*PFNEGLGETPLATFORMDISPLAYPROC)(EGLenum platform,
-                                                       void *native_display,
-                                                       const EGLAttrib *attrib_list);
+    if (cnx->egl.eglGetPlatformDisplay) {
+        std::vector<EGLAttrib> attrs;
+        addAnglePlatformAttributes(cnx, attrib_list, attrs);
+        attrs.push_back(EGL_NONE);
 
-    PFNEGLGETPLATFORMDISPLAYPROC eglGetPlatformDisplay =
-        reinterpret_cast<PFNEGLGETPLATFORMDISPLAYPROC>(cnx->egl.eglGetProcAddress("eglGetPlatformDisplay"));
+        dpy = cnx->egl.eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE,
+                                             reinterpret_cast<void*>(EGL_DEFAULT_DISPLAY),
+                                             attrs.data());
 
-    if (eglGetPlatformDisplay) {
-
-        intptr_t vendorEGL = (intptr_t)cnx->vendorEGL;
-
-       EGLAttrib attrs[] = {
-          EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE,
-          EGL_PLATFORM_ANGLE_EGL_HANDLE_ANGLE, vendorEGL,
-          EGL_NONE // list terminator
-       };
-
-       // Initially, request the default display type
-       dpy = eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, reinterpret_cast<void *>(EGL_DEFAULT_DISPLAY), attrs);
-
+        ALOGE_IF(dpy == EGL_NO_DISPLAY, "eglGetPlatformDisplay failed!");
     } else {
-              ALOGE("eglGetDisplay(%p) failed: Unable to look up eglGetPlatformDisplay from ANGLE", display);
+        ALOGE("eglGetDisplay(%p) failed: Unable to look up eglGetPlatformDisplay from ANGLE",
+              display);
     }
 
     return dpy;
 }
 
-EGLDisplay egl_display_t::getDisplay(EGLNativeDisplayType display) {
+EGLDisplay egl_display_t::getPlatformDisplay(EGLNativeDisplayType display,
+                                             const EGLAttrib* attrib_list) {
 
     std::lock_guard<std::mutex> _l(lock);
     ATRACE_CALL();
+
+    // TODO: Add check that this request is consistent with previous (if any).
+    // The use of ANGLE or not will be decided on the first call
+    // into EGL (typically eglGetDisplay).
+    // If a subsequent call asks for a display that doesn't match the
+    // existing display, the call should fail.
 
     // get our driver loader
     Loader& loader(Loader::getInstance());
@@ -168,9 +243,19 @@ EGLDisplay egl_display_t::getDisplay(EGLNativeDisplayType display) {
         EGLDisplay dpy = EGL_NO_DISPLAY;
 
         if (cnx->useAngle) {
-            dpy = getDisplayAngle(display, cnx);
-        } else {
-            dpy = cnx->egl.eglGetDisplay(display);
+            dpy = getPlatformDisplayAngle(display, cnx, attrib_list);
+        }
+        if (dpy == EGL_NO_DISPLAY) {
+            // NOTE: eglGetPlatformDisplay with a empty attribute list
+            // behaves the same as eglGetDisplay
+            if (cnx->egl.eglGetPlatformDisplay) {
+                dpy = cnx->egl.eglGetPlatformDisplay(EGL_PLATFORM_ANDROID_KHR, display, attrib_list);
+            } else {
+                if (attrib_list) {
+                    ALOGW("getPlatformDisplay: unexpected attribute list, attributes ignored");
+                }
+                dpy = cnx->egl.eglGetDisplay(display);
+            }
         }
 
         disp.dpy = dpy;
@@ -189,13 +274,17 @@ EGLBoolean egl_display_t::initialize(EGLint *major, EGLint *minor) {
         std::unique_lock<std::mutex> _l(refLock);
         refs++;
         if (refs > 1) {
-            if (major != NULL)
-                *major = VERSION_MAJOR;
-            if (minor != NULL)
-                *minor = VERSION_MINOR;
+            // Another thread may be initialzing EGL.
+            // Be sure initialization is complete before using EGL.
             while(!eglIsInitialized) {
                 refCond.wait(_l);
             }
+            egl_connection_t* const cnx = &gEGLImpl;
+
+            if (major != NULL)
+                *major = cnx->major;
+            if (minor != NULL)
+                *minor = cnx->minor;
             return EGL_TRUE;
         }
         while(eglIsInitialized) {
@@ -242,7 +331,14 @@ EGLBoolean egl_display_t::initialize(EGLint *major, EGLint *minor) {
 
         // the query strings are per-display
         mVendorString = sVendorString;
-        mVersionString = sVersionString;
+        if ((cnx->major == 1) && (cnx->minor == 5)) {
+            mVersionString = sVersionString15;
+        } else if ((cnx->major == 1) && (cnx->minor == 4)) {
+            mVersionString = sVersionString14;
+        } else {
+            ALOGW("Unexpected driver version: %d.%d, want 1.4 or 1.5", cnx->major, cnx->minor);
+            mVersionString = sVersionString14;
+        }
         mClientApiString = sClientApiString;
 
         mExtensionString = gBuiltinExtensionString;
@@ -309,10 +405,14 @@ EGLBoolean egl_display_t::initialize(EGLint *major, EGLint *minor) {
             traceGpuCompletion = true;
         }
 
+        // TODO: If device doesn't provide 1.4 or 1.5 then we'll be
+        // changing the behavior from the past where we always advertise
+        // version 1.4. May need to check that revision is valid
+        // before using cnx->major & cnx->minor
         if (major != NULL)
-            *major = VERSION_MAJOR;
+            *major = cnx->major;
         if (minor != NULL)
-            *minor = VERSION_MINOR;
+            *minor = cnx->minor;
     }
 
     { // scope for refLock

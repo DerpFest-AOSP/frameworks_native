@@ -25,6 +25,7 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <EGL/eglext_angle.h>
 
 #include <android/hardware_buffer.h>
 #include <private/android/AHardwareBufferHelpers.h>
@@ -278,10 +279,16 @@ static inline EGLContext getContext() { return egl_tls_t::getContext(); }
 
 // ----------------------------------------------------------------------------
 
-EGLDisplay eglGetDisplay(EGLNativeDisplayType display)
+static EGLDisplay eglGetPlatformDisplayImpl(EGLenum platform,
+                                            EGLNativeDisplayType display,
+                                            const EGLAttrib* attrib_list)
 {
     ATRACE_CALL();
     clearError();
+
+    if (platform != EGL_PLATFORM_ANDROID_KHR) {
+        return setError(EGL_BAD_PARAMETER, EGL_NO_DISPLAY);
+    }
 
     uintptr_t index = reinterpret_cast<uintptr_t>(display);
     if (index >= NUM_DISPLAYS) {
@@ -292,8 +299,26 @@ EGLDisplay eglGetDisplay(EGLNativeDisplayType display)
         return setError(EGL_BAD_PARAMETER, EGL_NO_DISPLAY);
     }
 
-    EGLDisplay dpy = egl_display_t::getFromNativeDisplay(display);
+    EGLDisplay dpy = egl_display_t::getFromNativeDisplay(display, attrib_list);
     return dpy;
+}
+
+EGLDisplay eglGetDisplay(EGLNativeDisplayType display)
+{
+    return eglGetPlatformDisplayImpl(EGL_PLATFORM_ANDROID_KHR, display, nullptr);
+}
+
+EGLDisplay eglGetPlatformDisplay(EGLenum platform,
+                                 void* native_display,
+                                 const EGLAttrib* attrib_list)
+{
+    if (native_display != EGL_DEFAULT_DISPLAY) {
+        return setError(EGL_BAD_PARAMETER, EGL_NO_DISPLAY);
+    }
+
+    return eglGetPlatformDisplayImpl(platform,
+                                     reinterpret_cast<EGLNativeDisplayType>(native_display),
+                                     attrib_list);
 }
 
 // ----------------------------------------------------------------------------
@@ -712,12 +737,16 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
             return setError(EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
         }
 
-        int result = native_window_api_connect(window, NATIVE_WINDOW_API_EGL);
-        if (result < 0) {
-            ALOGE("eglCreateWindowSurface: native_window_api_connect (win=%p) "
-                    "failed (%#x) (already connected to another API?)",
-                    window, result);
-            return setError(EGL_BAD_ALLOC, EGL_NO_SURFACE);
+        // NOTE: When using Vulkan backend, the Vulkan runtime makes all the
+        // native_window_* calls, so don't do them here.
+        if (cnx->angleBackend != EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE) {
+            int result = native_window_api_connect(window, NATIVE_WINDOW_API_EGL);
+            if (result < 0) {
+                ALOGE("eglCreateWindowSurface: native_window_api_connect (win=%p) "
+                      "failed (%#x) (already connected to another API?)",
+                      window, result);
+                return setError(EGL_BAD_ALLOC, EGL_NO_SURFACE);
+            }
         }
 
         EGLDisplay iDpy = dp->disp.dpy;
@@ -734,7 +763,7 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
         }
         attrib_list = strippedAttribList.data();
 
-        {
+        if (cnx->angleBackend != EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE) {
             int err = native_window_set_buffers_format(window, format);
             if (err != 0) {
                 ALOGE("error setting native window pixel format: %s (%d)",
@@ -742,16 +771,16 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
                 native_window_api_disconnect(window, NATIVE_WINDOW_API_EGL);
                 return setError(EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
             }
-        }
 
-        android_dataspace dataSpace = dataSpaceFromEGLColorSpace(colorSpace);
-        if (dataSpace != HAL_DATASPACE_UNKNOWN) {
-            int err = native_window_set_buffers_data_space(window, dataSpace);
-            if (err != 0) {
-                ALOGE("error setting native window pixel dataSpace: %s (%d)",
-                      strerror(-err), err);
-                native_window_api_disconnect(window, NATIVE_WINDOW_API_EGL);
-                return setError(EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
+            android_dataspace dataSpace = dataSpaceFromEGLColorSpace(colorSpace);
+            if (dataSpace != HAL_DATASPACE_UNKNOWN) {
+                err = native_window_set_buffers_data_space(window, dataSpace);
+                if (err != 0) {
+                    ALOGE("error setting native window pixel dataSpace: %s (%d)", strerror(-err),
+                          err);
+                    native_window_api_disconnect(window, NATIVE_WINDOW_API_EGL);
+                    return setError(EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
+                }
             }
         }
 
@@ -770,8 +799,10 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
         }
 
         // EGLSurface creation failed
-        native_window_set_buffers_format(window, 0);
-        native_window_api_disconnect(window, NATIVE_WINDOW_API_EGL);
+        if (cnx->angleBackend != EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE) {
+            native_window_set_buffers_format(window, 0);
+            native_window_api_disconnect(window, NATIVE_WINDOW_API_EGL);
+        }
     }
     return EGL_NO_SURFACE;
 }
@@ -1395,9 +1426,11 @@ EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw,
         }
     }
 
-    if (!sendSurfaceMetadata(s)) {
-        native_window_api_disconnect(s->getNativeWindow(), NATIVE_WINDOW_API_EGL);
-        return setError(EGL_BAD_NATIVE_WINDOW, (EGLBoolean)EGL_FALSE);
+    if (s->cnx->angleBackend != EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE) {
+        if (!sendSurfaceMetadata(s)) {
+            native_window_api_disconnect(s->getNativeWindow(), NATIVE_WINDOW_API_EGL);
+            return setError(EGL_BAD_NATIVE_WINDOW, (EGLBoolean)EGL_FALSE);
+        }
     }
 
     if (n_rects == 0) {
@@ -1418,7 +1451,10 @@ EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw,
         androidRect.bottom = y;
         androidRects.push_back(androidRect);
     }
-    native_window_set_surface_damage(s->getNativeWindow(), androidRects.data(), androidRects.size());
+    if (s->cnx->angleBackend != EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE) {
+        native_window_set_surface_damage(s->getNativeWindow(), androidRects.data(),
+                                         androidRects.size());
+    }
 
     if (s->cnx->egl.eglSwapBuffersWithDamageKHR) {
         return s->cnx->egl.eglSwapBuffersWithDamageKHR(dp->disp.dpy, s->surface,
@@ -1453,15 +1489,24 @@ const char* eglQueryString(EGLDisplay dpy, EGLint name)
 {
     clearError();
 
-    // Generate an error quietly when client extensions (as defined by
-    // EGL_EXT_client_extensions) are queried.  We do not want to rely on
-    // validate_display to generate the error as validate_display would log
-    // the error, which can be misleading.
-    //
-    // If we want to support EGL_EXT_client_extensions later, we can return
-    // the client extension string here instead.
-    if (dpy == EGL_NO_DISPLAY && name == EGL_EXTENSIONS)
-        return setErrorQuiet(EGL_BAD_DISPLAY, (const char*)0);
+    if (dpy == EGL_NO_DISPLAY && name == EGL_EXTENSIONS) {
+        // Return list of client extensions
+        std::string extensions("EGL_EXT_client_extensions EGL_KHR_platform_android");
+        // TODO: Check if ANGLE is a choice for this application
+        // If ANGLE has already been initialized with a specific
+        // backend, do not advertise support for the EGL_ANGLE_platform_angle
+        // extension since we no longer have a choice to make.
+        // This can happen when another thread initializes EGL before the
+        // application can initialize EGL. E.g. via GLSurfaceView or
+        // AndroidWebView. The View will initialize EGL with what's configured
+        // for that application. This implies that we need GLSurfaceView and
+        // AndroidWebView and other utilities to use Vulkan or otherwise give
+        // the application a chance to choose.
+        if (true) {
+            extensions.append(" EGL_ANGLE_platform_angle");
+        }
+        return extensions.c_str();
+    }
 
     const egl_display_ptr dp = validate_display(dpy);
     if (!dp) return (const char *) NULL;
