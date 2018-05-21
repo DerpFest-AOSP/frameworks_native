@@ -5,6 +5,10 @@ cc_defaults {
         "-Wall",
         "-Werror",
         "-Wextra",
+
+        "-Wunreachable-code",
+        "-Wunreachable-code-break",
+        "-Wunreachable-code-return",
     ],
     srcs: [
         "CacheItem.cpp",
@@ -15,9 +19,13 @@ cc_defaults {
         "utils.cpp",
         ":installd_aidl",
     ],
+    header_libs: [
+        "dex2oat_headers",
+    ],
     shared_libs: [
         "libbase",
         "libbinder",
+        "libcrypto",
         "libcutils",
         "liblog",
         "liblogwrap",
@@ -88,6 +96,30 @@ filegroup {
     name: "installd_aidl",
     srcs: [
         "binder/android/os/IInstalld.aidl",
+    ],
+}
+
+//
+// Static library for otapreopt used in testing
+//
+cc_library_static {
+    name: "libotapreoptparameters",
+    cflags: [
+        "-Wall",
+        "-Werror"
+    ],
+    clang: true,
+
+    srcs: [
+        "otapreopt_parameters.cpp"],
+
+    export_include_dirs: ["."],
+
+    shared_libs: [
+        "libbase",
+        "libcutils",
+        "liblog",
+        "libutils",
     ],
 }
 

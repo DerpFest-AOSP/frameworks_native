@@ -77,6 +77,7 @@ void add_mountinfo();
 #define RAFT_DIR "/data/misc/raft"
 #define RECOVERY_DIR "/cache/recovery"
 #define RECOVERY_DATA_DIR "/data/misc/recovery"
+#define UPDATE_ENGINE_LOG_DIR "/data/misc/update_engine_log"
 #define LOGPERSIST_DATA_DIR "/data/misc/logd"
 #define PROFILE_DATA_DIR_CUR "/data/misc/profiles/cur"
 #define PROFILE_DATA_DIR_REF "/data/misc/profiles/ref"
@@ -90,19 +91,6 @@ static const std::string TOMBSTONE_DIR = "/data/tombstones/";
 static const std::string TOMBSTONE_FILE_PREFIX = "tombstone_";
 static const std::string ANR_DIR = "/data/anr/";
 static const std::string ANR_FILE_PREFIX = "anr_";
-
-struct DumpData {
-    std::string name;
-    int fd;
-    time_t mtime;
-};
-
-static bool operator<(const DumpData& d1, const DumpData& d2) {
-    return d1.mtime > d2.mtime;
-}
-
-static std::unique_ptr<std::vector<DumpData>> tombstone_data;
-static std::unique_ptr<std::vector<DumpData>> anr_data;
 
 // TODO: temporary variables and functions used during C++ refactoring
 static Dumpstate& ds = Dumpstate::GetInstance();
@@ -146,15 +134,20 @@ static const CommandOptions AS_ROOT_20 = CommandOptions::WithTimeout(20).AsRoot(
  * is set, the vector only contains files that were written in the last 30 minutes.
  * If |limit_by_count| is set, the vector only contains the ten latest files.
  */
-static std::vector<DumpData>* GetDumpFds(const std::string& dir_path,
-                                         const std::string& file_prefix,
-                                         bool limit_by_mtime,
-                                         bool limit_by_count = true) {
+static std::vector<DumpData> GetDumpFds(const std::string& dir_path,
+                                        const std::string& file_prefix,
+                                        bool limit_by_mtime,
+                                        bool limit_by_count = true) {
     const time_t thirty_minutes_ago = ds.now_ - 60 * 30;
 
-    std::unique_ptr<std::vector<DumpData>> dump_data(new std::vector<DumpData>());
     std::unique_ptr<DIR, decltype(&closedir)> dump_dir(opendir(dir_path.c_str()), closedir);
 
+    if (dump_dir == nullptr) {
+        MYLOGW("Unable to open directory %s: %s\n", dir_path.c_str(), strerror(errno));
+        return std::vector<DumpData>();
+    }
+
+    std::vector<DumpData> dump_data;
     struct dirent* entry = nullptr;
     while ((entry = readdir(dump_dir.get()))) {
         if (entry->d_type != DT_REG) {
@@ -170,33 +163,34 @@ static std::vector<DumpData>* GetDumpFds(const std::string& dir_path,
         android::base::unique_fd fd(
             TEMP_FAILURE_RETRY(open(abs_path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)));
         if (fd == -1) {
-            MYLOGW("Unable to open dump file: %s %s\n", abs_path.c_str(), strerror(errno));
+            MYLOGW("Unable to open dump file %s: %s\n", abs_path.c_str(), strerror(errno));
             break;
         }
 
         struct stat st = {};
         if (fstat(fd, &st) == -1) {
-            MYLOGW("Unable to stat dump file: %s %s\n", abs_path.c_str(), strerror(errno));
+            MYLOGW("Unable to stat dump file %s: %s\n", abs_path.c_str(), strerror(errno));
             continue;
         }
 
-        if (limit_by_mtime && st.st_mtime >= thirty_minutes_ago) {
+        if (limit_by_mtime && st.st_mtime < thirty_minutes_ago) {
             MYLOGI("Excluding stale dump file: %s\n", abs_path.c_str());
             continue;
         }
 
-        DumpData data = {.name = abs_path, .fd = fd.release(), .mtime = st.st_mtime};
-
-        dump_data->push_back(data);
+        dump_data.emplace_back(DumpData{abs_path, std::move(fd), st.st_mtime});
     }
 
-    std::sort(dump_data->begin(), dump_data->end());
+    // Sort in descending modification time so that we only keep the newest
+    // reports if |limit_by_count| is true.
+    std::sort(dump_data.begin(), dump_data.end(),
+              [](const DumpData& d1, const DumpData& d2) { return d1.mtime > d2.mtime; });
 
-    if (limit_by_count && dump_data->size() > 10) {
-        dump_data->erase(dump_data->begin() + 10, dump_data->end());
+    if (limit_by_count && dump_data.size() > 10) {
+        dump_data.erase(dump_data.begin() + 10, dump_data.end());
     }
 
-    return dump_data.release();
+    return dump_data;
 }
 
 static bool AddDumps(const std::vector<DumpData>::const_iterator start,
@@ -229,12 +223,6 @@ static bool AddDumps(const std::vector<DumpData>::const_iterator start,
     }
 
     return dumped;
-}
-
-static void CloseDumpFds(const std::vector<DumpData>* dumps) {
-    for (auto it = dumps->begin(); it != dumps->end(); ++it) {
-        close(it->fd);
-    }
 }
 
 // for_each_pid() callback to get mount info about a process.
@@ -317,7 +305,7 @@ static bool dump_anrd_trace() {
     }
 
     // find anrd's pid if it is running.
-    pid = GetPidByName("/system/xbin/anrd");
+    pid = GetPidByName("/system/bin/anrd");
 
     if (pid > 0) {
         if (stat(trace_path, &st) == 0) {
@@ -876,53 +864,6 @@ static void DumpIpTablesAsRoot() {
     RunCommand("IP6TABLES RAW", {"ip6tables", "-t", "raw", "-L", "-nvx"});
 }
 
-static void AddGlobalAnrTraceFile(const bool add_to_zip, const std::string& anr_traces_file,
-                                  const std::string& anr_traces_dir) {
-    std::string dump_traces_dir;
-
-    if (dump_traces_path != nullptr) {
-        if (add_to_zip) {
-            dump_traces_dir = dirname(dump_traces_path);
-            MYLOGD("Adding ANR traces (directory %s) to the zip file\n", dump_traces_dir.c_str());
-            ds.AddDir(dump_traces_dir, true);
-        } else {
-            MYLOGD("Dumping current ANR traces (%s) to the main bugreport entry\n",
-                   dump_traces_path);
-            ds.DumpFile("VM TRACES JUST NOW", dump_traces_path);
-        }
-    }
-
-
-    // Make sure directory is not added twice.
-    // TODO: this is an overzealous check because it's relying on dump_traces_path - which is
-    // generated by dump_traces() -  and anr_traces_path - which is retrieved from a system
-    // property - but in reality they're the same path (although the former could be nullptr).
-    // Anyways, once dump_traces() is refactored as a private Dumpstate function, this logic should
-    // be revisited.
-    bool already_dumped = anr_traces_dir == dump_traces_dir;
-
-    MYLOGD("AddGlobalAnrTraceFile(): dump_traces_dir=%s, anr_traces_dir=%s, already_dumped=%d\n",
-           dump_traces_dir.c_str(), anr_traces_dir.c_str(), already_dumped);
-
-    android::base::unique_fd fd(TEMP_FAILURE_RETRY(
-        open(anr_traces_file.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)));
-    if (fd.get() < 0) {
-        printf("*** NO ANR VM TRACES FILE (%s): %s\n\n", anr_traces_file.c_str(), strerror(errno));
-    } else {
-        if (add_to_zip) {
-            if (!already_dumped) {
-                MYLOGD("Adding dalvik ANR traces (directory %s) to the zip file\n",
-                       anr_traces_dir.c_str());
-                ds.AddDir(anr_traces_dir, true);
-            }
-        } else {
-            MYLOGD("Dumping last ANR traces (%s) to the main bugreport entry\n",
-                   anr_traces_file.c_str());
-            dump_file_from_fd("VM TRACES AT LAST ANR", anr_traces_file.c_str(), fd.get());
-        }
-    }
-}
-
 static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_dir) {
     MYLOGD("AddAnrTraceDir(): dump_traces_file=%s, anr_traces_dir=%s\n", dump_traces_path,
            anr_traces_dir.c_str());
@@ -947,15 +888,15 @@ static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_
     }
 
     // Add a specific message for the first ANR Dump.
-    if (anr_data->size() > 0) {
-        AddDumps(anr_data->begin(), anr_data->begin() + 1,
+    if (ds.anr_data_.size() > 0) {
+        AddDumps(ds.anr_data_.begin(), ds.anr_data_.begin() + 1,
                  "VM TRACES AT LAST ANR", add_to_zip);
 
         // The "last" ANR will always be included as separate entry in the zip file. In addition,
         // it will be present in the body of the main entry if |add_to_zip| == false.
         //
         // Historical ANRs are always included as separate entries in the bugreport zip file.
-        AddDumps(anr_data->begin() + ((add_to_zip) ? 1 : 0), anr_data->end(),
+        AddDumps(ds.anr_data_.begin() + ((add_to_zip) ? 1 : 0), ds.anr_data_.end(),
                  "HISTORICAL ANR", true /* add_to_zip */);
     } else {
         printf("*** NO ANRs to dump in %s\n\n", ANR_DIR.c_str());
@@ -965,50 +906,22 @@ static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_
 static void AddAnrTraceFiles() {
     const bool add_to_zip = ds.IsZipping() && ds.version_ == VERSION_SPLIT_ANR;
 
-    std::string anr_traces_file;
-    std::string anr_traces_dir;
-    bool is_global_trace_file = true;
+    std::string anr_traces_dir = "/data/anr";
 
-    // First check whether the stack-trace-dir property is set. When it's set,
-    // each ANR trace will be written to a separate file and not to a global
-    // stack trace file.
-    anr_traces_dir = android::base::GetProperty("dalvik.vm.stack-trace-dir", "");
-    if (anr_traces_dir.empty()) {
-        anr_traces_file = android::base::GetProperty("dalvik.vm.stack-trace-file", "");
-        if (!anr_traces_file.empty()) {
-            anr_traces_dir = dirname(anr_traces_file.c_str());
-        }
-    } else {
-        is_global_trace_file = false;
-    }
+    AddAnrTraceDir(add_to_zip, anr_traces_dir);
 
-    // We have neither configured a global trace file nor a trace directory,
-    // there will be nothing to dump.
-    if (anr_traces_file.empty() && anr_traces_dir.empty()) {
-        printf("*** NO VM TRACES FILE DEFINED (dalvik.vm.stack-trace-file)\n\n");
-        return;
-    }
-
-    if (is_global_trace_file) {
-        AddGlobalAnrTraceFile(add_to_zip, anr_traces_file, anr_traces_dir);
-    } else {
-        AddAnrTraceDir(add_to_zip, anr_traces_dir);
-    }
-
-    /* slow traces for slow operations */
+    // Slow traces for slow operations.
     struct stat st;
-    if (!anr_traces_dir.empty()) {
-        int i = 0;
-        while (true) {
-            const std::string slow_trace_path =
-                anr_traces_dir + android::base::StringPrintf("slow%02d.txt", i);
-            if (stat(slow_trace_path.c_str(), &st)) {
-                // No traces file at this index, done with the files.
-                break;
-            }
-            ds.DumpFile("VM TRACES WHEN SLOW", slow_trace_path.c_str());
-            i++;
+    int i = 0;
+    while (true) {
+        const std::string slow_trace_path =
+            anr_traces_dir + android::base::StringPrintf("slow%02d.txt", i);
+        if (stat(slow_trace_path.c_str(), &st)) {
+            // No traces file at this index, done with the files.
+            break;
         }
+        ds.DumpFile("VM TRACES WHEN SLOW", slow_trace_path.c_str());
+        i++;
     }
 }
 
@@ -1128,7 +1041,7 @@ static void dumpstate() {
 
     // NOTE: tombstones are always added as separate entries in the zip archive
     // and are not interspersed with the main report.
-    const bool tombstones_dumped = AddDumps(tombstone_data->begin(), tombstone_data->end(),
+    const bool tombstones_dumped = AddDumps(ds.tombstone_data_.begin(), ds.tombstone_data_.end(),
                                             "TOMBSTONE", true /* add_to_zip */);
     if (!tombstones_dumped) {
         printf("*** NO TOMBSTONES to dump in %s\n\n", TOMBSTONE_DIR.c_str());
@@ -1159,19 +1072,6 @@ static void dumpstate() {
     RunCommand("FILESYSTEMS & FREE SPACE", {"df"});
 
     RunCommand("LAST RADIO LOG", {"parse_radio_log", "/proc/last_radio_log"});
-
-    printf("------ BACKLIGHTS ------\n");
-    printf("LCD brightness=");
-    DumpFile("", "/sys/class/leds/lcd-backlight/brightness");
-    printf("Button brightness=");
-    DumpFile("", "/sys/class/leds/button-backlight/brightness");
-    printf("Keyboard brightness=");
-    DumpFile("", "/sys/class/leds/keyboard-backlight/brightness");
-    printf("ALS mode=");
-    DumpFile("", "/sys/class/leds/lcd-backlight/als");
-    printf("LCD driver registers:\n");
-    DumpFile("", "/sys/class/leds/lcd-backlight/registers");
-    printf("\n");
 
     /* Binder state is expensive to look at as it uses a lot of memory. */
     DumpFile("BINDER FAILED TRANSACTION LOG", "/sys/kernel/debug/binder/failed_transaction_log");
@@ -1378,7 +1278,7 @@ static void ShowUsageAndExit(int exitCode = 1) {
             "  -p: capture screenshot to filename.png (requires -o)\n"
             "  -z: generate zipped file (requires -o)\n"
             "  -s: write output to control socket (for init)\n"
-            "  -S: write file location to control socket (for init; requires -o and -z)"
+            "  -S: write file location to control socket (for init; requires -o and -z)\n"
             "  -q: disable vibrate\n"
             "  -B: send broadcast when finished (requires -o)\n"
             "  -P: send broadcast when started and update system properties on "
@@ -1598,6 +1498,7 @@ int main(int argc, char *argv[]) {
             is_remote_mode = 1;
             do_fb = 0;
         } else if (ds.extra_options_ == "bugreportwear") {
+            do_start_service = true;
             ds.update_progress_ = true;
         } else if (ds.extra_options_ == "bugreporttelephony") {
             telephony_only = true;
@@ -1848,11 +1749,12 @@ int main(int argc, char *argv[]) {
         dump_traces_path = dump_traces();
 
         /* Run some operations that require root. */
-        tombstone_data.reset(GetDumpFds(TOMBSTONE_DIR, TOMBSTONE_FILE_PREFIX, !ds.IsZipping()));
-        anr_data.reset(GetDumpFds(ANR_DIR, ANR_FILE_PREFIX, !ds.IsZipping()));
+        ds.tombstone_data_ = GetDumpFds(TOMBSTONE_DIR, TOMBSTONE_FILE_PREFIX, !ds.IsZipping());
+        ds.anr_data_ = GetDumpFds(ANR_DIR, ANR_FILE_PREFIX, !ds.IsZipping());
 
         ds.AddDir(RECOVERY_DIR, true);
         ds.AddDir(RECOVERY_DATA_DIR, true);
+        ds.AddDir(UPDATE_ENGINE_LOG_DIR, true);
         ds.AddDir(LOGPERSIST_DATA_DIR, false);
         if (!PropertiesHelper::IsUserBuild()) {
             ds.AddDir(PROFILE_DATA_DIR_CUR, true);
@@ -1954,9 +1856,11 @@ int main(int argc, char *argv[]) {
     }
 
     /* vibrate a few but shortly times to let user know it's finished */
-    for (int i = 0; i < 3; i++) {
-        Vibrate(75);
-        usleep((75 + 50) * 1000);
+    if (do_vibrate) {
+        for (int i = 0; i < 3; i++) {
+            Vibrate(75);
+            usleep((75 + 50) * 1000);
+        }
     }
 
     /* tell activity manager we're done */
@@ -2017,8 +1921,8 @@ int main(int argc, char *argv[]) {
         close(ds.control_socket_fd_);
     }
 
-    CloseDumpFds(tombstone_data.get());
-    CloseDumpFds(anr_data.get());
+    ds.tombstone_data_.clear();
+    ds.anr_data_.clear();
 
     return 0;
 }
