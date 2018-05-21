@@ -26,6 +26,8 @@
 
 #include <android-base/macros.h>
 #include <android/hidl/manager/1.0/IServiceManager.h>
+#include <hidl-util/FqInstance.h>
+#include <vintf/HalManifest.h>
 
 #include "Command.h"
 #include "NullableOStream.h"
@@ -42,6 +44,12 @@ struct PidInfo {
     std::map<uint64_t, Pids> refPids; // pids that are referenced
     uint32_t threadUsage; // number of threads in use
     uint32_t threadCount; // number of threads total
+};
+
+enum class HalType {
+    BINDERIZED_SERVICES = 0,
+    PASSTHROUGH_CLIENTS,
+    PASSTHROUGH_LIBRARIES
 };
 
 class ListCommand : public Command {
@@ -75,6 +83,8 @@ public:
     // key: value returned by getopt_long
     using RegisteredOptions = std::vector<RegisteredOption>;
 
+    static std::string INIT_VINTF_NOTES;
+
 protected:
     Status parseArgs(const Arg &arg);
     Status fetch();
@@ -104,10 +114,14 @@ protected:
     // Read and return /proc/{pid}/cmdline.
     virtual std::string parseCmdline(pid_t pid) const;
     // Return /proc/{pid}/cmdline if it exists, else empty string.
-    const std::string &getCmdline(pid_t pid);
+    const std::string& getCmdline(pid_t pid);
     // Call getCmdline on all pid in pids. If it returns empty string, the process might
     // have died, and the pid is removed from pids.
     void removeDeadProcesses(Pids *pids);
+
+    virtual Partition getPartition(pid_t pid);
+    Partition resolvePartition(Partition processPartition, const FqInstance &fqInstance) const;
+
     void forEachTable(const std::function<void(Table &)> &f);
     void forEachTable(const std::function<void(const Table &)> &f) const;
 
@@ -115,6 +129,13 @@ protected:
     NullableOStream<std::ostream> out() const;
 
     void registerAllOptions();
+
+    // helper functions to dumpVintf.
+    bool addEntryWithInstance(const TableEntry &entry, vintf::HalManifest *manifest) const;
+    bool addEntryWithoutInstance(const TableEntry &entry, const vintf::HalManifest *manifest) const;
+
+    // Helper function. Whether to list entries corresponding to a given HAL type.
+    bool shouldReportHalType(const HalType &type) const;
 
     Table mServicesTable{};
     Table mPassthroughRefTable{};
@@ -125,11 +146,16 @@ protected:
 
     bool mEmitDebugInfo = false;
 
-    // If true, output in VINTF format.
+    // If true, output in VINTF format. Output only entries from the specified partition.
     bool mVintf = false;
+    Partition mVintfPartition = Partition::UNKNOWN;
 
     // If true, explanatory text are not emitted.
     bool mNeat = false;
+
+    // Type(s) of HAL associations to list. By default, report all.
+    std::vector<HalType> mListTypes{HalType::BINDERIZED_SERVICES, HalType::PASSTHROUGH_CLIENTS,
+                                    HalType::PASSTHROUGH_LIBRARIES};
 
     // If an entry does not exist, need to ask /proc/{pid}/cmdline to get it.
     // If an entry exist but is an empty string, process might have died.
@@ -138,6 +164,9 @@ protected:
 
     // Cache for getPidInfo.
     std::map<pid_t, PidInfo> mCachedPidInfos;
+
+    // Cache for getPartition.
+    std::map<pid_t, Partition> mPartitions;
 
     RegisteredOptions mOptions;
     // All selected columns

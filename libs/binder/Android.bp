@@ -36,6 +36,7 @@ cc_library {
     vndk: {
         enabled: true,
     },
+    double_loadable: true,
 
     srcs: [
         "AppOpsManager.cpp",
@@ -92,6 +93,7 @@ cc_library {
         "liblog",
         "libcutils",
         "libutils",
+        "libutilscallstack",
     ],
 
     header_libs: [

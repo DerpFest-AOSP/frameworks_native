@@ -14,7 +14,7 @@ shared_libs = [
 ]
 
 header_libraries = [
-    "libdvr_headers"
+    "libdvr_headers",
 ]
 
 cc_library {
@@ -29,7 +29,6 @@ cc_library {
         "-Werror",
     ],
     name: "libvirtualtouchpad",
-    tags: ["optional"],
 }
 
 // Touchpad unit tests.
@@ -48,19 +47,18 @@ cc_test {
     srcs: test_src_files,
     static_libs: test_static_libs,
     header_libs: header_libraries,
-    cflags = [
+    cflags: [
         "-Wall",
         "-Werror",
     ],
-    cppflags = [
+    cppflags: [
         "-std=c++11",
     ],
-    host_ldlibs = [
+    host_ldlibs: [
         "-llog",
     ],
     name: "VirtualTouchpad_test",
     stl: "libc++_static",
-    tags: [ "optional" ],
 }
 
 // Service.
@@ -96,7 +94,6 @@ cc_binary {
     ],
     host_ldlibs: ["-llog"],
     name: "virtual_touchpad",
-    tags: ["optional"],
     init_rc: ["virtual_touchpad.rc"],
     compile_multilib: "64",
     stl: "libc++_static",
@@ -129,6 +126,5 @@ cc_library {
     ],
     host_ldlibs: ["-llog"],
     name: "libvirtualtouchpadclient",
-    tags: ["optional"],
     export_include_dirs: ["include"],
 }
