@@ -28,7 +28,7 @@ cc_library_headers {
     ],
 }
 
-cc_library {
+cc_library_shared {
     name: "libbinder",
 
     // for vndbinder
@@ -61,6 +61,7 @@ cc_library {
         "MemoryDealer.cpp",
         "MemoryHeapBase.cpp",
         "Parcel.cpp",
+        "ParcelFileDescriptor.cpp",
         "PermissionCache.cpp",
         "PersistableBundle.cpp",
         "ProcessInfoService.cpp",

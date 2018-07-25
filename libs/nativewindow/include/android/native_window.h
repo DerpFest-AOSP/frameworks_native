@@ -177,7 +177,7 @@ int32_t ANativeWindow_lock(ANativeWindow* window, ANativeWindow_Buffer* outBuffe
  */
 int32_t ANativeWindow_unlockAndPost(ANativeWindow* window);
 
-#if __ANDROID_API__ >= __ANDROID_API_O__
+#if __ANDROID_API__ >= 26
 
 /**
  * Set a transform that will be applied to future buffers posted to the window.
@@ -185,9 +185,9 @@ int32_t ANativeWindow_unlockAndPost(ANativeWindow* window);
  * \param transform combination of {@link ANativeWindowTransform} flags
  * \return 0 for success, or -EINVAL if \p transform is invalid
  */
-int32_t ANativeWindow_setBuffersTransform(ANativeWindow* window, int32_t transform);
+int32_t ANativeWindow_setBuffersTransform(ANativeWindow* window, int32_t transform) __INTRODUCED_IN(26);
 
-#endif // __ANDROID_API__ >= __ANDROID_API_O__
+#endif // __ANDROID_API__ >= 26
 
 #ifdef __cplusplus
 };

@@ -19,6 +19,8 @@ on post-fs
     chmod 0666 /sys/kernel/tracing/options/overwrite
     chmod 0666 /sys/kernel/debug/tracing/options/print-tgid
     chmod 0666 /sys/kernel/tracing/options/print-tgid
+    chmod 0666 /sys/kernel/debug/tracing/options/record-tgid
+    chmod 0666 /sys/kernel/tracing/options/record-tgid
     chmod 0666 /sys/kernel/debug/tracing/saved_cmdlines_size
     chmod 0666 /sys/kernel/tracing/saved_cmdlines_size
     chmod 0666 /sys/kernel/debug/tracing/events/sched/sched_switch/enable
@@ -55,6 +57,8 @@ on post-fs
     chmod 0666 /sys/kernel/tracing/events/binder/binder_transaction/enable
     chmod 0666 /sys/kernel/debug/tracing/events/binder/binder_transaction_received/enable
     chmod 0666 /sys/kernel/tracing/events/binder/binder_transaction_received/enable
+    chmod 0666 /sys/kernel/debug/tracing/events/binder/binder_transaction_alloc_buf/enable
+    chmod 0666 /sys/kernel/tracing/events/binder/binder_transaction_alloc_buf/enable
     chmod 0666 /sys/kernel/debug/tracing/events/binder/binder_lock/enable
     chmod 0666 /sys/kernel/tracing/events/binder/binder_lock/enable
     chmod 0666 /sys/kernel/debug/tracing/events/binder/binder_locked/enable
@@ -81,6 +85,11 @@ on post-fs
     chmod 0666 /sys/kernel/tracing/events/i2c/smbus_reply/enable
     chmod 0666 /sys/kernel/debug/tracing/events/lowmemorykiller/enable
     chmod 0666 /sys/kernel/tracing/events/lowmemorykiller/enable
+    chmod 0666 /sys/kernel/debug/tracing/events/sync/enable
+    chmod 0666 /sys/kernel/tracing/events/sync/enable
+    chmod 0666 /sys/kernel/debug/tracing/events/fence/enable
+    chmod 0666 /sys/kernel/tracing/events/fence/enable
+
 
     # disk
     chmod 0666 /sys/kernel/tracing/events/f2fs/f2fs_get_data_block/enable
@@ -121,6 +130,42 @@ on post-fs
 # Read and truncate the kernel trace.
     chmod 0666 /sys/kernel/debug/tracing/trace
     chmod 0666 /sys/kernel/tracing/trace
+
+# Read and truncate the per-CPU kernel trace.
+# Cannot use wildcards in .rc files. Update this if there is a phone with
+# more CPUs.
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu0/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu0/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu1/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu1/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu2/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu2/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu3/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu3/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu4/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu4/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu5/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu5/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu6/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu6/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu6/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu7/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu8/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu8/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu9/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu9/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu10/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu10/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu11/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu11/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu12/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu12/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu13/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu13/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu14/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu14/trace
+    chmod 0666 /sys/kernel/debug/tracing/per_cpu/cpu15/trace
+    chmod 0666 /sys/kernel/tracing/per_cpu/cpu15/trace
 
 on property:persist.debug.atrace.boottrace=1
     start boottrace
