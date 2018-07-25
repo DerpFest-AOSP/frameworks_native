@@ -58,6 +58,7 @@ using std::string;
 #define MAX_SYS_FILES 10
 
 const char* k_traceTagsProperty = "debug.atrace.tags.enableflags";
+const char* k_userInitiatedTraceProperty = "debug.atrace.user_initiated";
 
 const char* k_traceAppsNumberProperty = "debug.atrace.app_number";
 const char* k_traceAppsPropertyTemplate = "debug.atrace.app_%d";
@@ -196,7 +197,7 @@ static const TracingCategory k_categories[] = {
         { REQ,      "events/vmscan/mm_vmscan_direct_reclaim_end/enable" },
         { REQ,      "events/vmscan/mm_vmscan_kswapd_wake/enable" },
         { REQ,      "events/vmscan/mm_vmscan_kswapd_sleep/enable" },
-        { REQ,      "events/lowmemorykiller/enable" },
+        { OPT,      "events/lowmemorykiller/enable" },
     } },
     { "regulators",  "Voltage and Current Regulators", 0, {
         { REQ,      "events/regulator/enable" },
@@ -204,6 +205,7 @@ static const TracingCategory k_categories[] = {
     { "binder_driver", "Binder Kernel driver", 0, {
         { REQ,      "events/binder/binder_transaction/enable" },
         { REQ,      "events/binder/binder_transaction_received/enable" },
+        { REQ,      "events/binder/binder_transaction_alloc_buf/enable" },
         { OPT,      "events/binder/binder_set_priority/enable" },
     } },
     { "binder_lock", "Binder global lock trace", 0, {
@@ -255,6 +257,9 @@ static const char* k_currentTracerPath =
 
 static const char* k_printTgidPath =
     "options/print-tgid";
+
+static const char* k_recordTgidPath =
+    "options/record-tgid";
 
 static const char* k_funcgraphAbsTimePath =
     "options/funcgraph-abstime";
@@ -444,6 +449,16 @@ static bool setTraceOverwriteEnable(bool enable)
     return setKernelOptionEnable(k_tracingOverwriteEnablePath, enable);
 }
 
+// Set the user initiated trace property
+static bool setUserInitiatedTraceProperty(bool enable)
+{
+    if (!android::base::SetProperty(k_userInitiatedTraceProperty, enable ? "1" : "")) {
+        fprintf(stderr, "error setting user initiated strace system property\n");
+        return false;
+    }
+    return true;
+}
+
 // Enable or disable kernel tracing.
 static bool setTracingEnabled(bool enable)
 {
@@ -508,8 +523,14 @@ static bool setClock()
 
 static bool setPrintTgidEnableIfPresent(bool enable)
 {
+    // Pre-4.13 this was options/print-tgid as an android-specific option.
+    // In 4.13+ this is an upstream option called options/record-tgid
+    // Both options produce the same ftrace format change
     if (fileExists(k_printTgidPath)) {
         return setKernelOptionEnable(k_printTgidPath, enable);
+    }
+    if (fileExists(k_recordTgidPath)) {
+        return setKernelOptionEnable(k_recordTgidPath, enable);
     }
     return true;
 }
@@ -837,6 +858,8 @@ static bool setUpKernelTracing()
 {
     bool ok = true;
 
+    ok &= setUserInitiatedTraceProperty(true);
+
     // Set up the tracing options.
     ok &= setCategoriesEnableFromFile(g_categoriesFile);
     ok &= setTraceOverwriteEnable(g_traceOverwrite);
@@ -884,6 +907,7 @@ static void cleanUpKernelTracing()
     setTraceBufferSizeKB(1);
     setPrintTgidEnableIfPresent(false);
     setKernelTraceFuncs(NULL);
+    setUserInitiatedTraceProperty(false);
 }
 
 // Enable tracing in the kernel.
