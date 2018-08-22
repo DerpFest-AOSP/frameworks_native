@@ -981,6 +981,21 @@ status_t SurfaceFlinger::getDisplayStats(const sp<IBinder>& /* display */,
     return NO_ERROR;
 }
 
+status_t SurfaceFlinger::getDisplayViewport(const sp<IBinder>& display, Rect* outViewport) {
+    if (outViewport == nullptr || display.get() == nullptr) {
+        return BAD_VALUE;
+    }
+
+    sp<const DisplayDevice> device(getDisplayDevice(display));
+    if (device == nullptr) {
+        return BAD_VALUE;
+    }
+
+    *outViewport = device->getViewport();
+
+    return NO_ERROR;
+}
+
 int SurfaceFlinger::getActiveConfig(const sp<IBinder>& display) {
     if (display == nullptr) {
         ALOGE("%s : display is nullptr", __func__);
@@ -4833,8 +4848,8 @@ status_t SurfaceFlinger::captureScreen(const sp<IBinder>& display, sp<GraphicBuf
         sourceCrop.set(dispScissor);
         // adb shell screencap will default reqWidth and reqHeight to zeros.
         if (reqWidth == 0 || reqHeight == 0) {
-            reqWidth = uint32_t(dispScissor.width());
-            reqHeight = uint32_t(dispScissor.height());
+            reqWidth = uint32_t(device->getViewport().width());
+            reqHeight = uint32_t(device->getViewport().height());
         }
     }
 
