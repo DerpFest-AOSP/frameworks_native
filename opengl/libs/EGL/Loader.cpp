@@ -38,6 +38,18 @@
 
 extern "C" {
   android_namespace_t* android_get_exported_namespace(const char*);
+
+  // TODO(ianelliott@): Get this from an ANGLE header:
+  typedef enum ANGLEPreference {
+      ANGLE_NO_PREFERENCE = 0,
+      ANGLE_PREFER_NATIVE = 1,
+      ANGLE_PREFER_ANGLE = 2,
+  } ANGLEPreference;
+
+  // TODO(ianelliott@): Get this from an ANGLE header:
+  typedef bool (*fpANGLEUseForApplication)(const char* appName, const char* deviceMfr,
+                                           const char* deviceModel, ANGLEPreference developerOption,
+                                           ANGLEPreference appPreference);
 }
 
 // ----------------------------------------------------------------------------
@@ -491,15 +503,52 @@ static void* load_angle(const char* kind, egl_connection_t* cnx)
     const char* app_pref = android_getAngleAppPref();
     bool developer_opt_in = android_getAngleDeveloperOptIn();
 
-    if (ns) {
-        // If we got a namespce for ANGLE, check any other conditions
-        // before loading from it.
-        // TODO: Call opt-in logic rather than use pref directly
-        //       app_pref will be "angle", "native", or "dontcare"
-        if ((developer_opt_in ||
-             !strcmp(app_pref, "angle"))) {
-            so = load_angle_from_namespace(kind, ns);
+    // Determine whether or not to use ANGLE:
+    ANGLEPreference developer_option = developer_opt_in
+            ? ANGLE_PREFER_ANGLE
+            : ANGLE_NO_PREFERENCE;
+    bool use_angle = (developer_option == ANGLE_PREFER_ANGLE);
+
+    if (use_angle) {
+        ALOGD("User set \"Developer Options\" to force the use of ANGLE");
+    } else {
+        // The "Developer Options" value wasn't set to force the use of ANGLE.  Need to temporarily
+        // load ANGLE and call the updatable opt-in/out logic:
+        std::string app_name_str = app_name ? app_name : "";
+        char manufacturer[PROPERTY_VALUE_MAX];
+        char model[PROPERTY_VALUE_MAX];
+        property_get("ro.product.manufacturer", manufacturer, "UNSET");
+        property_get("ro.product.model", model, "UNSET");
+        ANGLEPreference app_preference = (app_pref && !strcmp(app_pref, "angle"))
+                ? ANGLE_PREFER_ANGLE
+                : (app_pref && !strcmp(app_pref, "native")) ? ANGLE_PREFER_NATIVE
+                                                            : ANGLE_NO_PREFERENCE;
+
+        so = load_angle_from_namespace("GLESv2", ns);
+        if (so) {
+            ALOGD("Temporarily loaded ANGLE's opt-in/out logic from namespace");
+            fpANGLEUseForApplication fp =
+                    (fpANGLEUseForApplication)dlsym(so, "ANGLEUseForApplication");
+            if (fp) {
+                use_angle = (fp)(app_name_str.c_str(), manufacturer, model, developer_option,
+                                 app_preference);
+                ALOGD("Result of opt-in/out logic is %s", use_angle ? "true" : "false");
+            }
+
+            ALOGD("Close temporarily-loaded ANGLE opt-in/out logic");
+            dlclose(so);
+            so = nullptr;
+        } else {
+            // We weren't able to load and call the updateable opt-in/out logic.  Therefore, go
+            // with any application preference:
+            use_angle = (app_preference == ANGLE_PREFER_ANGLE);
+            ALOGD("Could not temporarily-load the ANGLE opt-in/out logic.  "
+                  "Using application preference of %s",
+                  (use_angle) ? "true" : "false");
         }
+    }
+    if (use_angle) {
+        so = load_angle_from_namespace(kind, ns);
     }
 
     if (so) {
