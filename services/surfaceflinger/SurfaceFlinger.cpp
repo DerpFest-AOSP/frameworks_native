@@ -3011,6 +3011,7 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& displayDev
     const DisplayRenderArea renderArea(displayDevice);
     const auto hwcId = displayDevice->getHwcDisplayId();
     const bool hasClientComposition = getBE().mHwc->hasClientComposition(hwcId);
+    const bool hasFlipClientTargetReq = getBE().mHwc->hasFlipClientTargetRequest(hwcId);
     ATRACE_INT("hasClientComposition", hasClientComposition);
 
     bool applyColorMatrix = false;
@@ -3096,6 +3097,18 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& displayDev
             const uint32_t height = displayDevice->getHeight();
             getBE().mRenderEngine->setScissor(scissor.left, height - scissor.bottom,
                                               scissor.getWidth(), scissor.getHeight());
+        }
+    } else if (hasFlipClientTargetReq) {
+        if (!displayDevice->makeCurrent()) {
+            ALOGW("DisplayDevice::makeCurrent failed. Aborting surface composition for display %s",
+                  displayDevice->getDisplayName().string());
+            getRenderEngine().resetCurrentSurface();
+
+            // |mStateLock| not needed as we are on the main thread
+            if(!getDefaultDisplayDeviceLocked()->makeCurrent()) {
+              ALOGE("DisplayDevice::makeCurrent on default display failed. Aborting.");
+            }
+            return false;
         }
     }
 
