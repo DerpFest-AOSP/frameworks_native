@@ -21,18 +21,20 @@ git checkout 95277a300f52bf89b7a8c14ada10e4dd3c5962b5
 
 ## AOSP
 Google docs on downloading, building and installing AOSP [here](https://source.android.com/setup/build/building).
-Choose the “angle-preview” branch (which is based on “aosp-android-9.0.0_r8”), based on available vendor binaries posted [here](https://developers.google.com/android/drivers#marlinppr2.180905.006.a1). List of tagged branches [here](https://source.android.com/setup/start/build-numbers#source-code-tags-and-builds).
+Choose the “pie-angle-preview-dev” branch (which is based on “aosp-android-9.0.0_r8”),
+based on available vendor binaries posted [here](https://developers.google.com/android/drivers#marlinppr2.180905.006.a1).
+List of tagged branches [here](https://source.android.com/setup/start/build-numbers#source-code-tags-and-builds).
 
 ```bash
 cd <location_for_aosp_build>
 mkdir pie-angle-preview-dev
 cd pie-angle-preview-dev
-repo init --depth=1 -u https://android.googlesource.com/platform/manifest -b angle-preview && repo sync -q -j$(nproc)
+repo init --depth=1 -u https://android.googlesource.com/platform/manifest -b pie-angle-preview-dev && repo sync -q -j$(nproc)
 ```
 
 ## Pixel Binaries
 The example downloads bits to build AOSP on a Google Pixel XL.
-Download vendor and google binaries [here](https://developers.google.com/android/drivers#marlinppr2.180905.006.a1) into the top-level directory of your build (the angle-preview branch that you created above).
+Download vendor and google binaries [here](https://developers.google.com/android/drivers#marlinppr2.180905.006.a1) into the top-level directory of your build (the pie-angle-preview-dev branch that you created above).
 These must match the version of source being built.
 Untar and extract binaries:
 ```bash
