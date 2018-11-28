@@ -611,7 +611,7 @@ String8 ProgramCache::generateFragmentShader(const Key& needs) {
 
     fs << "void main(void) {" << indent;
     if (needs.isTexturing()) {
-        fs << "gl_FragColor = texture2D(sampler, outTexCoords);";
+        fs << "gl_FragColor = clamp(texture2D(sampler, outTexCoords), 0.0, 1.0);";
         if (needs.isY410BT2020()) {
             fs << "gl_FragColor.rgb = convertY410BT2020(gl_FragColor.rgb);";
         }
