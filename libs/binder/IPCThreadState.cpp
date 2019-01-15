@@ -17,12 +17,15 @@
 #define LOG_TAG "IPCThreadState"
 
 #include <binder/IPCThreadState.h>
+#include <binderthreadstate/IPCThreadStateBase.h>
 
 #include <binder/Binder.h>
 #include <binder/BpBinder.h>
 #include <binder/TextOutput.h>
 
+#include <android-base/macros.h>
 #include <cutils/sched_policy.h>
+#include <utils/CallStack.h>
 #include <utils/Log.h>
 #include <utils/SystemClock.h>
 #include <utils/threads.h>
@@ -616,6 +619,16 @@ status_t IPCThreadState::transact(int32_t handle,
     }
 
     if ((flags & TF_ONE_WAY) == 0) {
+        if (UNLIKELY(mCallRestriction != ProcessState::CallRestriction::NONE)) {
+            if (mCallRestriction == ProcessState::CallRestriction::ERROR_IF_NOT_ONEWAY) {
+                ALOGE("Process making non-oneway call but is restricted.");
+                CallStack::logStack("non-oneway call", CallStack::getCurrent(10).get(),
+                    ANDROID_LOG_ERROR);
+            } else /* FATAL_IF_NOT_ONEWAY */ {
+                LOG_ALWAYS_FATAL("Process may not make oneway calls.");
+            }
+        }
+
         #if 0
         if (code == 4) { // relayout
             ALOGI(">>>>>> CALLING transaction 4");
@@ -736,12 +749,14 @@ status_t IPCThreadState::clearDeathNotification(int32_t handle, BpBinder* proxy)
 IPCThreadState::IPCThreadState()
     : mProcess(ProcessState::self()),
       mStrictModePolicy(0),
-      mLastTransactionBinderFlags(0)
+      mLastTransactionBinderFlags(0),
+      mCallRestriction(mProcess->mCallRestriction)
 {
     pthread_setspecific(gTLS, this);
     clearCaller();
     mIn.setDataCapacity(256);
     mOut.setDataCapacity(256);
+    mIPCThreadStateBase = IPCThreadStateBase::self();
 }
 
 IPCThreadState::~IPCThreadState()
@@ -1082,6 +1097,9 @@ status_t IPCThreadState::executeCommand(int32_t cmd)
                 "Not enough command data for brTRANSACTION");
             if (result != NO_ERROR) break;
 
+            //Record the fact that we're in a binder call.
+            mIPCThreadStateBase->pushCurrentState(
+                IPCThreadStateBase::CallState::BINDER);
             Parcel buffer;
             buffer.ipcSetDataReference(
                 reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer),
@@ -1129,6 +1147,7 @@ status_t IPCThreadState::executeCommand(int32_t cmd)
                 error = the_context_object->transact(tr.code, buffer, &reply, tr.flags);
             }
 
+            mIPCThreadStateBase->popCurrentState();
             //ALOGI("<<<< TRANSACT from pid %d restore pid %d uid %d\n",
             //     mCallingPid, origPid, origUid);
 
@@ -1190,6 +1209,10 @@ status_t IPCThreadState::executeCommand(int32_t cmd)
     }
 
     return result;
+}
+
+bool IPCThreadState::isServingCall() const {
+    return mIPCThreadStateBase->getCurrentBinderCallState() == IPCThreadStateBase::CallState::BINDER;
 }
 
 void IPCThreadState::threadDestructor(void *st)

@@ -158,7 +158,7 @@ void FrameEvents::dump(String8& outString) const
 namespace {
 
 struct FrameNumberEqual {
-    FrameNumberEqual(uint64_t frameNumber) : mFrameNumber(frameNumber) {}
+    explicit FrameNumberEqual(uint64_t frameNumber) : mFrameNumber(frameNumber) {}
     bool operator()(const FrameEvents& frame) {
         return frame.valid && mFrameNumber == frame.frameNumber;
     }
@@ -621,7 +621,7 @@ status_t FrameEventsDelta::unflatten(void const*& buffer, size_t& size,
 // ============================================================================
 
 FrameEventHistoryDelta& FrameEventHistoryDelta::operator=(
-        FrameEventHistoryDelta&& src) {
+        FrameEventHistoryDelta&& src) noexcept {
     mCompositorTiming = src.mCompositorTiming;
 
     if (CC_UNLIKELY(!mDeltas.empty())) {

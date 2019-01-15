@@ -20,6 +20,7 @@
 #include <mutex>
 #include <vector>
 
+#include <android-base/unique_fd.h>
 #include <binder/BinderService.h>
 
 #include "android/os/BnDumpstate.h"
@@ -40,6 +41,10 @@ class DumpstateService : public BinderService<DumpstateService>, public BnDumpst
     binder::Status setListener(const std::string& name, const sp<IDumpstateListener>& listener,
                                bool getSectionDetails,
                                sp<IDumpstateToken>* returned_token) override;
+
+    binder::Status startBugreport(const android::base::unique_fd& bugreport_fd,
+                                  const android::base::unique_fd& screenshot_fd, int bugreport_mode,
+                                  const sp<IDumpstateListener>& listener) override;
 
   private:
     Dumpstate& ds_;

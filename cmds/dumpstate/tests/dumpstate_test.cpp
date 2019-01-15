@@ -36,6 +36,7 @@
 #include <android-base/properties.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
+#include <cutils/properties.h>
 
 namespace android {
 namespace os {
@@ -54,8 +55,14 @@ using ::testing::internal::CaptureStdout;
 using ::testing::internal::GetCapturedStderr;
 using ::testing::internal::GetCapturedStdout;
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 class DumpstateListenerMock : public IDumpstateListener {
   public:
+    MOCK_METHOD1(onProgress, binder::Status(int32_t progress));
+    MOCK_METHOD1(onError, binder::Status(int32_t error_code));
+    MOCK_METHOD3(onFinished, binder::Status(int64_t duration_ms, const ::std::string& title,
+                                            const ::std::string& description));
     MOCK_METHOD1(onProgressUpdated, binder::Status(int32_t progress));
     MOCK_METHOD1(onMaxProgressUpdated, binder::Status(int32_t max_progress));
     MOCK_METHOD4(onSectionComplete, binder::Status(const ::std::string& name, int32_t status,
@@ -81,6 +88,10 @@ class DumpstateBaseTest : public Test {
 
     void SetBuildType(const std::string& build_type) const {
         PropertiesHelper::build_type_ = build_type;
+    }
+
+    void SetUnroot(bool unroot) const {
+        PropertiesHelper::unroot_ = unroot;
     }
 
     bool IsStandalone() const {
@@ -135,6 +146,463 @@ class DumpstateBaseTest : public Test {
     }
 };
 
+class DumpOptionsTest : public Test {
+  public:
+    virtual ~DumpOptionsTest() {
+    }
+    virtual void SetUp() {
+        options_ = Dumpstate::DumpOptions();
+    }
+    void TearDown() {
+        // Reset the property
+        property_set("dumpstate.options", "");
+    }
+    Dumpstate::DumpOptions options_;
+};
+
+TEST_F(DumpOptionsTest, InitializeNone) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstate")
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+
+    EXPECT_FALSE(options_.do_add_date);
+    EXPECT_FALSE(options_.do_zip_file);
+    EXPECT_EQ("", options_.use_outfile);
+    EXPECT_FALSE(options_.use_socket);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.do_fb);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.do_broadcast);
+}
+
+TEST_F(DumpOptionsTest, InitializeAdbBugreport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstatez"),
+        const_cast<char*>("-S"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.use_control_socket);
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_fb);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.do_broadcast);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeAdbShellBugreport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstate"),
+        const_cast<char*>("-s"),
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.use_socket);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_EQ("", options_.use_outfile);
+    EXPECT_FALSE(options_.do_add_date);
+    EXPECT_FALSE(options_.do_zip_file);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_fb);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.do_broadcast);
+}
+
+TEST_F(DumpOptionsTest, InitializeFullBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+    };
+    // clang-format on
+    property_set("dumpstate.options", "bugreportfull");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+    EXPECT_FALSE(options_.do_start_service);
+}
+
+TEST_F(DumpOptionsTest, InitializeInteractiveBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreportplus");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.do_progress_updates);
+    EXPECT_TRUE(options_.do_start_service);
+    EXPECT_FALSE(options_.do_fb);
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeRemoteBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreportremote");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.do_vibrate);
+    EXPECT_FALSE(options_.do_fb);
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+
+    // Other options retain default values
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeWearBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreportwear");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.do_progress_updates);
+    EXPECT_TRUE(options_.do_start_service);
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeTelephonyBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreporttelephony");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.telephony_only);
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeWifiBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreportwifi");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.wifi_only);
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeDefaultBugReport) {
+    // default: commandline options are not overridden
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+    EXPECT_FALSE(options_.wifi_only);
+}
+
+TEST_F(DumpOptionsTest, InitializePartial1) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstate"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-z"),
+        const_cast<char*>("-o abc"),
+        const_cast<char*>("-s"),
+        const_cast<char*>("-S"),
+
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_zip_file);
+    // TODO: Maybe we should trim the filename
+    EXPECT_EQ(" abc", std::string(options_.use_outfile));
+    EXPECT_TRUE(options_.use_socket);
+    EXPECT_TRUE(options_.use_control_socket);
+
+    // Other options retain default values
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.do_fb);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.do_broadcast);
+}
+
+TEST_F(DumpOptionsTest, InitializePartial2) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstate"),
+        const_cast<char*>("-v"),
+        const_cast<char*>("-q"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-P"),
+        const_cast<char*>("-R"),
+        const_cast<char*>("-B"),
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_vibrate);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_progress_updates);
+    EXPECT_TRUE(options_.is_remote_mode);
+    EXPECT_TRUE(options_.do_broadcast);
+
+    // Other options retain default values
+    EXPECT_FALSE(options_.do_add_date);
+    EXPECT_FALSE(options_.do_zip_file);
+    EXPECT_EQ("", options_.use_outfile);
+    EXPECT_FALSE(options_.use_socket);
+    EXPECT_FALSE(options_.use_control_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeHelp) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstate"),
+        const_cast<char*>("-h")
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    // -h is for help.
+    EXPECT_EQ(status, Dumpstate::RunStatus::HELP);
+}
+
+TEST_F(DumpOptionsTest, InitializeUnknown) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstate"),
+        const_cast<char*>("-u")  // unknown flag
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    // -u is unknown.
+    EXPECT_EQ(status, Dumpstate::RunStatus::INVALID_INPUT);
+}
+
+TEST_F(DumpOptionsTest, ValidateOptionsNeedOutfile1) {
+    options_.do_zip_file = true;
+    EXPECT_FALSE(options_.ValidateOptions());
+    options_.use_outfile = "a/b/c";
+    EXPECT_TRUE(options_.ValidateOptions());
+}
+
+TEST_F(DumpOptionsTest, ValidateOptionsNeedOutfile2) {
+    options_.do_broadcast = true;
+    EXPECT_FALSE(options_.ValidateOptions());
+    options_.use_outfile = "a/b/c";
+    EXPECT_TRUE(options_.ValidateOptions());
+}
+
+TEST_F(DumpOptionsTest, ValidateOptionsNeedZipfile) {
+    options_.use_control_socket = true;
+    EXPECT_FALSE(options_.ValidateOptions());
+
+    options_.do_zip_file = true;
+    options_.use_outfile = "a/b/c";  // do_zip_file needs outfile
+    EXPECT_TRUE(options_.ValidateOptions());
+}
+
+TEST_F(DumpOptionsTest, ValidateOptionsUpdateProgressNeedsBroadcast) {
+    options_.do_progress_updates = true;
+    options_.use_outfile = "a/b/c";  // do_progress_updates needs outfile
+    EXPECT_FALSE(options_.ValidateOptions());
+
+    options_.do_broadcast = true;
+    EXPECT_TRUE(options_.ValidateOptions());
+}
+
+TEST_F(DumpOptionsTest, ValidateOptionsRemoteMode) {
+    options_.is_remote_mode = true;
+    EXPECT_FALSE(options_.ValidateOptions());
+
+    options_.do_broadcast = true;
+    options_.do_zip_file = true;
+    options_.do_add_date = true;
+    options_.use_outfile = "a/b/c";  // do_broadcast needs outfile
+    EXPECT_TRUE(options_.ValidateOptions());
+}
+
 class DumpstateTest : public DumpstateBaseTest {
   public:
     void SetUp() {
@@ -142,8 +610,8 @@ class DumpstateTest : public DumpstateBaseTest {
         SetDryRun(false);
         SetBuildType(android::base::GetProperty("ro.build.type", "(unknown)"));
         ds.progress_.reset(new Progress());
-        ds.update_progress_ = false;
         ds.update_progress_threshold_ = 0;
+        ds.options_.reset(new Dumpstate::DumpOptions());
     }
 
     // Runs a command and capture `stdout` and `stderr`.
@@ -168,7 +636,7 @@ class DumpstateTest : public DumpstateBaseTest {
     }
 
     void SetProgress(long progress, long initial_max, long threshold = 0) {
-        ds.update_progress_ = true;
+        ds.options_->do_progress_updates = true;
         ds.update_progress_threshold_ = threshold;
         ds.last_updated_progress_ = 0;
         ds.progress_.reset(new Progress(initial_max, progress, 1.2));
@@ -479,6 +947,32 @@ TEST_F(DumpstateTest, RunCommandAsRootNonUserBuild) {
     EXPECT_THAT(err, StrEq("stderr\n"));
 }
 
+TEST_F(DumpstateTest, RunCommandAsRootNonUserBuild_withUnroot) {
+    if (!IsStandalone()) {
+        // TODO: temporarily disabled because it might cause other tests to fail after dropping
+        // to Shell - need to refactor tests to avoid this problem)
+        MYLOGE(
+            "Skipping DumpstateTest.RunCommandAsRootNonUserBuild_withUnroot() "
+            "on test suite\n")
+        return;
+    }
+    if (PropertiesHelper::IsUserBuild()) {
+        ALOGI("Skipping RunCommandAsRootNonUserBuild_withUnroot on user builds\n");
+        return;
+    }
+
+    // Same test as above, but with unroot property set, which will override su availability.
+    SetUnroot(true);
+    DropRoot();
+
+    EXPECT_EQ(0, RunCommand("", {kSimpleCommand, "--uid"},
+                            CommandOptions::WithTimeout(1).AsRoot().Build()));
+
+    // AsRoot is ineffective.
+    EXPECT_THAT(out, StrEq("2000\nstdout\n"));
+    EXPECT_THAT(err, StrEq("drop_root_user(): already running as Shell\nstderr\n"));
+}
+
 TEST_F(DumpstateTest, RunCommandAsRootIfAvailableOnUserBuild) {
     if (!IsStandalone()) {
         // TODO: temporarily disabled because it might cause other tests to fail after dropping
@@ -518,6 +1012,32 @@ TEST_F(DumpstateTest, RunCommandAsRootIfAvailableOnDebugBuild) {
                             CommandOptions::WithTimeout(1).AsRootIfAvailable().Build()));
 
     EXPECT_THAT(out, StrEq("0\nstdout\n"));
+    EXPECT_THAT(err, StrEq("stderr\n"));
+}
+
+TEST_F(DumpstateTest, RunCommandAsRootIfAvailableOnDebugBuild_withUnroot) {
+    if (!IsStandalone()) {
+        // TODO: temporarily disabled because it might cause other tests to fail after dropping
+        // to Shell - need to refactor tests to avoid this problem)
+        MYLOGE(
+            "Skipping DumpstateTest.RunCommandAsRootIfAvailableOnDebugBuild_withUnroot() "
+            "on test suite\n")
+        return;
+    }
+    if (PropertiesHelper::IsUserBuild()) {
+        ALOGI("Skipping RunCommandAsRootIfAvailableOnDebugBuild_withUnroot on user builds\n");
+        return;
+    }
+    // Same test as above, but with unroot property set, which will override su availability.
+    SetUnroot(true);
+
+    DropRoot();
+
+    EXPECT_EQ(0, RunCommand("", {kSimpleCommand, "--uid"},
+                            CommandOptions::WithTimeout(1).AsRootIfAvailable().Build()));
+
+    // It's a userdebug build, so "su root" should be available, but unroot=true overrides it.
+    EXPECT_THAT(out, StrEq("2000\nstdout\n"));
     EXPECT_THAT(err, StrEq("stderr\n"));
 }
 

@@ -99,7 +99,7 @@ bool SetThreadPolicy(const std::string& scheduler_class,
 class TraceArgs {
  public:
   template <typename... Args>
-  TraceArgs(const char* format, Args&&... args) {
+  explicit TraceArgs(const char* format, Args&&... args) {
     std::array<char, 1024> buffer;
     snprintf(buffer.data(), buffer.size(), format, std::forward<Args>(args)...);
     atrace_begin(ATRACE_TAG, buffer.data());
@@ -1272,9 +1272,9 @@ Layer::Layer(Hwc2::Composer* composer, const DisplayParams& display_params,
 
 Layer::~Layer() { Reset(); }
 
-Layer::Layer(Layer&& other) { *this = std::move(other); }
+Layer::Layer(Layer&& other) noexcept { *this = std::move(other); }
 
-Layer& Layer::operator=(Layer&& other) {
+Layer& Layer::operator=(Layer&& other) noexcept {
   if (this != &other) {
     Reset();
     using std::swap;
