@@ -8,7 +8,6 @@ cc_defaults {
         "-Wunused",
         "-Wunreachable-code",
     ],
-    cppflags: ["-std=c++1z"],
 }
 
 cc_defaults {
@@ -27,6 +26,7 @@ cc_defaults {
         "android.hardware.graphics.composer@2.1",
         "android.hardware.graphics.composer@2.2",
         "android.hardware.power@1.0",
+        "android.hardware.power@1.3",
         "libbase",
         "libbinder",
         "libbufferhubqueue",
@@ -49,12 +49,10 @@ cc_defaults {
         "libtimestats_proto",
         "libui",
         "libutils",
-        "libvulkan",
     ],
     static_libs: [
         "libserviceutils",
         "libtrace_proto",
-        "libvkjson",
         "libvr_manager",
         "libvrflinger",
     ],
@@ -69,6 +67,7 @@ cc_defaults {
         "android.hardware.graphics.allocator@2.0",
         "android.hardware.graphics.composer@2.1",
         "android.hardware.graphics.composer@2.2",
+        "android.hardware.power@1.3",
         "libhidlbase",
         "libhidltransport",
         "libhwbinder",
@@ -96,6 +95,7 @@ filegroup {
         "DisplayHardware/HWC2.cpp",
         "DisplayHardware/HWComposer.cpp",
         "DisplayHardware/HWComposerBufferCache.cpp",
+        "DisplayHardware/PowerAdvisor.cpp",
         "DisplayHardware/VirtualDisplaySurface.cpp",
         "DispSync.cpp",
         "Effects/Daltonizer.cpp",
@@ -103,7 +103,6 @@ filegroup {
         "EventLog/EventLog.cpp",
         "EventThread.cpp",
         "FrameTracker.cpp",
-        "GpuService.cpp",
         "Layer.cpp",
         "LayerProtoHelper.cpp",
         "LayerRejecter.cpp",

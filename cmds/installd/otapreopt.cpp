@@ -32,6 +32,7 @@
 #include <android-base/macros.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
+#include <art_image_values.h>
 #include <cutils/fs.h>
 #include <cutils/properties.h>
 #include <dex2oat_return_codes.h>
@@ -321,21 +322,8 @@ private:
             return false;
         }
         const char* isa = parameters_.instruction_set;
-
-        // Check whether the file exists where expected.
         std::string dalvik_cache = GetOTADataDirectory() + "/" + DALVIK_CACHE;
         std::string isa_path = dalvik_cache + "/" + isa;
-        std::string art_path = isa_path + "/system@framework@boot.art";
-        std::string oat_path = isa_path + "/system@framework@boot.oat";
-        bool cleared = false;
-        if (access(art_path.c_str(), F_OK) == 0 && access(oat_path.c_str(), F_OK) == 0) {
-            // Files exist, assume everything is alright if not forced. Otherwise clean up.
-            if (!force) {
-                return true;
-            }
-            ClearDirectory(isa_path);
-            cleared = true;
-        }
 
         // Reset umask in otapreopt, so that we control the the access for the files we create.
         umask(0);
@@ -354,18 +342,34 @@ private:
             }
         }
 
-        // Prepare to create.
+        // Check whether we have files in /data.
+        // TODO: check that the files are correct wrt/ jars.
+        std::string art_path = isa_path + "/system@framework@boot.art";
+        std::string oat_path = isa_path + "/system@framework@boot.oat";
+        bool cleared = false;
+        if (access(art_path.c_str(), F_OK) == 0 && access(oat_path.c_str(), F_OK) == 0) {
+            // Files exist, assume everything is alright if not forced. Otherwise clean up.
+            if (!force) {
+                return true;
+            }
+            ClearDirectory(isa_path);
+            cleared = true;
+        }
+
+        // Check whether we have an image in /system.
+        // TODO: check that the files are correct wrt/ jars.
+        std::string preopted_boot_art_path = StringPrintf("/system/framework/%s/boot.art", isa);
+        if (access(preopted_boot_art_path.c_str(), F_OK) == 0) {
+            // Note: we ignore |force| here.
+            return true;
+        }
+
+
         if (!cleared) {
             ClearDirectory(isa_path);
         }
 
-        std::string preopted_boot_art_path = StringPrintf("/system/framework/%s/boot.art", isa);
-        if (access(preopted_boot_art_path.c_str(), F_OK) == 0) {
-          return PatchoatBootImage(isa_path, isa);
-        } else {
-          // No preopted boot image. Try to compile.
-          return Dex2oatBootImage(boot_classpath_, art_path, oat_path, isa);
-        }
+        return Dex2oatBootImage(boot_classpath_, art_path, oat_path, isa);
     }
 
     static bool CreatePath(const std::string& path) {
@@ -430,29 +434,6 @@ private:
         CHECK_EQ(0, closedir(c_dir)) << "Unable to close directory.";
     }
 
-    bool PatchoatBootImage(const std::string& output_dir, const char* isa) const {
-        // This needs to be kept in sync with ART, see art/runtime/gc/space/image_space.cc.
-
-        std::vector<std::string> cmd;
-        cmd.push_back("/system/bin/patchoat");
-
-        cmd.push_back("--input-image-location=/system/framework/boot.art");
-        cmd.push_back(StringPrintf("--output-image-directory=%s", output_dir.c_str()));
-
-        cmd.push_back(StringPrintf("--instruction-set=%s", isa));
-
-        int32_t base_offset = ChooseRelocationOffsetDelta(ART_BASE_ADDRESS_MIN_DELTA,
-                                                          ART_BASE_ADDRESS_MAX_DELTA);
-        cmd.push_back(StringPrintf("--base-offset-delta=%d", base_offset));
-
-        std::string error_msg;
-        bool result = Exec(cmd, &error_msg);
-        if (!result) {
-            LOG(ERROR) << "Could not generate boot image: " << error_msg;
-        }
-        return result;
-    }
-
     bool Dex2oatBootImage(const std::string& boot_cp,
                           const std::string& art_path,
                           const std::string& oat_path,
@@ -466,9 +447,9 @@ private:
         }
         cmd.push_back(StringPrintf("--oat-file=%s", oat_path.c_str()));
 
-        int32_t base_offset = ChooseRelocationOffsetDelta(ART_BASE_ADDRESS_MIN_DELTA,
-                ART_BASE_ADDRESS_MAX_DELTA);
-        cmd.push_back(StringPrintf("--base=0x%x", ART_BASE_ADDRESS + base_offset));
+        int32_t base_offset = ChooseRelocationOffsetDelta(art::GetImageMinBaseAddressDelta(),
+                                                          art::GetImageMaxBaseAddressDelta());
+        cmd.push_back(StringPrintf("--base=0x%x", art::GetImageBaseAddress() + base_offset));
 
         cmd.push_back(StringPrintf("--instruction-set=%s", isa));
 
@@ -610,7 +591,7 @@ private:
         // If the dexopt failed, we may have a stale boot image from a previous OTA run.
         // Then regenerate and retry.
         if (WEXITSTATUS(dexopt_result) ==
-                static_cast<int>(art::dex2oat::ReturnCode::kCreateRuntime)) {
+                static_cast<int>(::art::dex2oat::ReturnCode::kCreateRuntime)) {
             if (!PrepareBootImage(/* force */ true)) {
                 LOG(ERROR) << "Forced boot image creating failed. Original error return was "
                         << dexopt_result;

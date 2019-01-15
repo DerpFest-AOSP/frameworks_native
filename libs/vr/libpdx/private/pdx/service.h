@@ -86,14 +86,14 @@ class Channel : public std::enable_shared_from_this<Channel> {
 class Message : public OutputResourceMapper, public InputResourceMapper {
  public:
   Message();
-  Message(const MessageInfo& info);
+  explicit Message(const MessageInfo& info);
   ~Message();
 
   /*
    * Message objects support move construction and assignment.
    */
-  Message(Message&& other);
-  Message& operator=(Message&& other);
+  Message(Message&& other) noexcept;
+  Message& operator=(Message&& other) noexcept;
 
   /*
    * Read/write payload, in either single buffer or iovec form.

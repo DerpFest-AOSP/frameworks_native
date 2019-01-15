@@ -18,13 +18,14 @@ package android.os;
 
 import android.os.IDumpstateListener;
 import android.os.IDumpstateToken;
+import android.os.DumpstateOptions;
 
 /**
   * Binder interface for the currently running dumpstate process.
   * {@hide}
   */
 interface IDumpstate {
-
+    // TODO: remove method once startBugReport is used by Shell.
     /*
      * Sets the listener for this dumpstate progress.
      *
@@ -35,4 +36,37 @@ interface IDumpstate {
      */
     IDumpstateToken setListener(@utf8InCpp String name, IDumpstateListener listener,
                                 boolean getSectionDetails);
+
+    // These modes encapsulate a set of run time options for generating bugreports.
+    // Takes a bugreport without user interference.
+    const int BUGREPORT_MODE_FULL = 0;
+
+    // Interactive bugreport, i.e. triggered by the user.
+    const int BUGREPORT_MODE_INTERACTIVE = 1;
+
+    // Remote bugreport triggered by DevicePolicyManager, for e.g.
+    const int BUGREPORT_MODE_REMOTE = 2;
+
+    // Bugreport triggered on a wear device.
+    const int BUGREPORT_MODE_WEAR = 3;
+
+    // Bugreport limited to only telephony info.
+    const int BUGREPORT_MODE_TELEPHONY = 4;
+
+    // Bugreport limited to only wifi info.
+    const int BUGREPORT_MODE_WIFI = 5;
+
+    // Default mode.
+    const int BUGREPORT_MODE_DEFAULT = 6;
+
+    /*
+     * Starts a bugreport in the background.
+     *
+     * @param bugreportFd the file to which the zipped bugreport should be written
+     * @param screenshotFd the file to which screenshot should be written; optional
+     * @param bugreportMode the mode that specifies other run time options; must be one of above
+     * @param listener callback for updates; optional
+     */
+    void startBugreport(FileDescriptor bugreportFd, FileDescriptor screenshotFd, int bugreportMode,
+                        IDumpstateListener listener);
 }

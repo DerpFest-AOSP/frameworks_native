@@ -24,10 +24,31 @@
 
 #include "DumpstateInternal.h"
 
+using android::base::StringPrintf;
+
 namespace android {
 namespace os {
 
 namespace {
+
+static binder::Status exception(uint32_t code, const std::string& msg) {
+    MYLOGE("%s (%d) ", msg.c_str(), code);
+    return binder::Status::fromExceptionCode(code, String8(msg.c_str()));
+}
+
+static binder::Status error(uint32_t code, const std::string& msg) {
+    MYLOGE("%s (%d) ", msg.c_str(), code);
+    return binder::Status::fromServiceSpecificError(code, String8(msg.c_str()));
+}
+
+static void* callAndNotify(void* data) {
+    Dumpstate& ds = *static_cast<Dumpstate*>(data);
+    // TODO(111441001): Return status on listener.
+    ds.Run();
+    MYLOGE("Finished Run()\n");
+    return nullptr;
+}
+
 class DumpstateToken : public BnDumpstateToken {};
 }
 
@@ -77,30 +98,71 @@ binder::Status DumpstateService::setListener(const std::string& name,
     return binder::Status::ok();
 }
 
+binder::Status DumpstateService::startBugreport(const android::base::unique_fd& bugreport_fd,
+                                                const android::base::unique_fd& screenshot_fd,
+                                                int bugreport_mode,
+                                                const sp<IDumpstateListener>& listener) {
+    MYLOGI("startBugreport() with mode: %d\n", bugreport_mode);
+
+    if (bugreport_mode != Dumpstate::BugreportMode::BUGREPORT_FULL &&
+        bugreport_mode != Dumpstate::BugreportMode::BUGREPORT_INTERACTIVE &&
+        bugreport_mode != Dumpstate::BugreportMode::BUGREPORT_REMOTE &&
+        bugreport_mode != Dumpstate::BugreportMode::BUGREPORT_WEAR &&
+        bugreport_mode != Dumpstate::BugreportMode::BUGREPORT_TELEPHONY &&
+        bugreport_mode != Dumpstate::BugreportMode::BUGREPORT_WIFI &&
+        bugreport_mode != Dumpstate::BugreportMode::BUGREPORT_DEFAULT) {
+        return exception(binder::Status::EX_ILLEGAL_ARGUMENT,
+                         StringPrintf("Invalid bugreport mode: %d", bugreport_mode));
+    }
+
+    if (bugreport_fd.get() == -1 || screenshot_fd.get() == -1) {
+        return exception(binder::Status::EX_ILLEGAL_ARGUMENT, "Invalid file descriptor");
+    }
+
+    std::unique_ptr<Dumpstate::DumpOptions> options = std::make_unique<Dumpstate::DumpOptions>();
+    options->Initialize(static_cast<Dumpstate::BugreportMode>(bugreport_mode), bugreport_fd,
+                        screenshot_fd);
+
+    std::lock_guard<std::mutex> lock(lock_);
+    // TODO(b/111441001): Disallow multiple simultaneous bugreports.
+    ds_.SetOptions(std::move(options));
+    if (listener != nullptr) {
+        ds_.listener_ = listener;
+    }
+
+    pthread_t thread;
+    status_t err = pthread_create(&thread, nullptr, callAndNotify, &ds_);
+    if (err != 0) {
+        return error(err, "Could not create a background thread.");
+    }
+    return binder::Status::ok();
+}
+
 status_t DumpstateService::dump(int fd, const Vector<String16>&) {
     dprintf(fd, "id: %d\n", ds_.id_);
     dprintf(fd, "pid: %d\n", ds_.pid_);
-    dprintf(fd, "update_progress: %s\n", ds_.update_progress_ ? "true" : "false");
+    dprintf(fd, "update_progress: %s\n", ds_.options_->do_progress_updates ? "true" : "false");
     dprintf(fd, "update_progress_threshold: %d\n", ds_.update_progress_threshold_);
     dprintf(fd, "last_updated_progress: %d\n", ds_.last_updated_progress_);
     dprintf(fd, "progress:\n");
     ds_.progress_->Dump(fd, "  ");
-    dprintf(fd, "args: %s\n", ds_.args_.c_str());
-    dprintf(fd, "extra_options: %s\n", ds_.extra_options_.c_str());
+    dprintf(fd, "args: %s\n", ds_.options_->args.c_str());
+    dprintf(fd, "extra_options: %s\n", ds_.options_->extra_options.c_str());
     dprintf(fd, "version: %s\n", ds_.version_.c_str());
     dprintf(fd, "bugreport_dir: %s\n", ds_.bugreport_dir_.c_str());
+    dprintf(fd, "bugreport_internal_dir_: %s\n", ds_.bugreport_internal_dir_.c_str());
     dprintf(fd, "screenshot_path: %s\n", ds_.screenshot_path_.c_str());
     dprintf(fd, "log_path: %s\n", ds_.log_path_.c_str());
     dprintf(fd, "tmp_path: %s\n", ds_.tmp_path_.c_str());
     dprintf(fd, "path: %s\n", ds_.path_.c_str());
-    dprintf(fd, "extra_options: %s\n", ds_.extra_options_.c_str());
+    dprintf(fd, "extra_options: %s\n", ds_.options_->extra_options.c_str());
     dprintf(fd, "base_name: %s\n", ds_.base_name_.c_str());
     dprintf(fd, "name: %s\n", ds_.name_.c_str());
     dprintf(fd, "now: %ld\n", ds_.now_);
     dprintf(fd, "is_zipping: %s\n", ds_.IsZipping() ? "true" : "false");
     dprintf(fd, "listener: %s\n", ds_.listener_name_.c_str());
-    dprintf(fd, "notification title: %s\n", ds_.notification_title.c_str());
-    dprintf(fd, "notification description: %s\n", ds_.notification_description.c_str());
+    dprintf(fd, "notification title: %s\n", ds_.options_->notification_title.c_str());
+    dprintf(fd, "notification description: %s\n", ds_.options_->notification_description.c_str());
 
     return NO_ERROR;
 }

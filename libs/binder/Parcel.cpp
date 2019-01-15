@@ -467,7 +467,6 @@ status_t Parcel::setData(const uint8_t* buffer, size_t len)
 
 status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
 {
-    const sp<ProcessState> proc(ProcessState::self());
     status_t err;
     const uint8_t *data = parcel->mData;
     const binder_size_t *objects = parcel->mObjects;
@@ -520,6 +519,7 @@ status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
     err = NO_ERROR;
 
     if (numObjects > 0) {
+        const sp<ProcessState> proc(ProcessState::self());
         // grow objects
         if (mObjectsCapacity < mObjectsSize + numObjects) {
             size_t newSize = ((mObjectsSize + numObjects)*3)/2;
@@ -2239,8 +2239,30 @@ int Parcel::readParcelFileDescriptor() const
     int32_t hasComm = readInt32();
     int fd = readFileDescriptor();
     if (hasComm != 0) {
-        // skip
-        readFileDescriptor();
+        // detach (owned by the binder driver)
+        int comm = readFileDescriptor();
+
+        // warning: this must be kept in sync with:
+        // frameworks/base/core/java/android/os/ParcelFileDescriptor.java
+        enum ParcelFileDescriptorStatus {
+            DETACHED = 2,
+        };
+
+#if BYTE_ORDER == BIG_ENDIAN
+        const int32_t message = ParcelFileDescriptorStatus::DETACHED;
+#endif
+#if BYTE_ORDER == LITTLE_ENDIAN
+        const int32_t message = __builtin_bswap32(ParcelFileDescriptorStatus::DETACHED);
+#endif
+
+        ssize_t written = TEMP_FAILURE_RETRY(
+            ::write(comm, &message, sizeof(message)));
+
+        if (written == -1 || written != sizeof(message)) {
+            ALOGW("Failed to detach ParcelFileDescriptor written: %zd err: %s",
+                written, strerror(errno));
+            return BAD_TYPE;
+        }
     }
     return fd;
 }
@@ -2521,8 +2543,11 @@ void Parcel::print(TextOutput& to, uint32_t /*flags*/) const
 
 void Parcel::releaseObjects()
 {
-    const sp<ProcessState> proc(ProcessState::self());
     size_t i = mObjectsSize;
+    if (i == 0) {
+        return;
+    }
+    sp<ProcessState> proc(ProcessState::self());
     uint8_t* const data = mData;
     binder_size_t* const objects = mObjects;
     while (i > 0) {
@@ -2535,8 +2560,11 @@ void Parcel::releaseObjects()
 
 void Parcel::acquireObjects()
 {
-    const sp<ProcessState> proc(ProcessState::self());
     size_t i = mObjectsSize;
+    if (i == 0) {
+        return;
+    }
+    const sp<ProcessState> proc(ProcessState::self());
     uint8_t* const data = mData;
     binder_size_t* const objects = mObjects;
     while (i > 0) {

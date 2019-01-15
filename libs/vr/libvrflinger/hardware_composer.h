@@ -86,8 +86,8 @@ class Layer {
         const std::shared_ptr<IonBuffer>& buffer, HWC::BlendMode blending,
         HWC::Composition composition_type, size_t z_order);
 
-  Layer(Layer&&);
-  Layer& operator=(Layer&&);
+  Layer(Layer&&) noexcept;
+  Layer& operator=(Layer&&) noexcept;
 
   ~Layer();
 
@@ -195,7 +195,7 @@ class Layer {
     AcquiredBuffer acquired_buffer;
     pdx::LocalHandle release_fence;
 
-    SourceSurface(const std::shared_ptr<DirectDisplaySurface>& surface)
+    explicit SourceSurface(const std::shared_ptr<DirectDisplaySurface>& surface)
         : surface(surface) {}
 
     // Attempts to acquire a new buffer from the surface and return a tuple with
