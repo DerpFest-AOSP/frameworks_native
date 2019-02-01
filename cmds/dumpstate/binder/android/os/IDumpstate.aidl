@@ -18,7 +18,6 @@ package android.os;
 
 import android.os.IDumpstateListener;
 import android.os.IDumpstateToken;
-import android.os.DumpstateOptions;
 
 /**
   * Binder interface for the currently running dumpstate process.
@@ -59,14 +58,29 @@ interface IDumpstate {
     // Default mode.
     const int BUGREPORT_MODE_DEFAULT = 6;
 
+    // TODO(b/111441001): Should the args be for the consuming application rather than triggering?
     /*
      * Starts a bugreport in the background.
      *
+     *<p>Shows the user a dialog to get consent for sharing the bugreport with the calling
+     * application. If they deny {@link IDumpstateListener#onError} will be called. If they
+     * consent and bugreport generation is successful artifacts will be copied to the given fds and
+     * {@link IDumpstateListener#onFinished} will be called. If there
+     * are errors in bugreport generation {@link IDumpstateListener#onError} will be called.
+     *
+     * @param callingUid UID of the original application that requested the report.
+     * @param callingPackage package of the original application that requested the report.
      * @param bugreportFd the file to which the zipped bugreport should be written
      * @param screenshotFd the file to which screenshot should be written; optional
      * @param bugreportMode the mode that specifies other run time options; must be one of above
      * @param listener callback for updates; optional
      */
-    void startBugreport(FileDescriptor bugreportFd, FileDescriptor screenshotFd, int bugreportMode,
-                        IDumpstateListener listener);
+    void startBugreport(int callingUid, @utf8InCpp String callingPackage,
+                        FileDescriptor bugreportFd, FileDescriptor screenshotFd,
+                        int bugreportMode, IDumpstateListener listener);
+
+    /*
+     * Cancels the bugreport currently in progress.
+     */
+    void cancelBugreport();
 }

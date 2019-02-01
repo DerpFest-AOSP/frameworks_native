@@ -61,6 +61,15 @@ std::string create_data_user_de_package_path(const char* volume_uuid,
 std::string create_data_user_ce_package_path_as_user_link(
         const char* volume_uuid, userid_t userid, const char* package_name);
 
+std::string create_data_misc_ce_rollback_path(const char* volume_uuid, userid_t user);
+std::string create_data_misc_de_rollback_path(const char* volume_uuid, userid_t user);
+std::string create_data_misc_ce_rollback_package_path(const char* volume_uuid,
+        userid_t user, const char* package_name);
+std::string create_data_misc_ce_rollback_package_path(const char* volume_uuid,
+        userid_t user, const char* package_name, ino_t ce_rollback_inode);
+std::string create_data_misc_de_rollback_package_path(const char* volume_uuid,
+        userid_t user, const char* package_name);
+
 std::string create_data_media_path(const char* volume_uuid, userid_t userid);
 std::string create_data_media_obb_path(const char* volume_uuid, const char* package_name);
 std::string create_data_media_package_path(const char* volume_uuid, userid_t userid,
@@ -139,6 +148,8 @@ int prepare_app_cache_dir(const std::string& parent, const char* name, mode_t ta
 // If a subdirectory or profile file cannot be opened the method logs a warning and moves on.
 // It returns true if there were no errors at all, and false otherwise.
 bool collect_profiles(std::vector<std::string>* profiles_paths);
+
+void drop_capabilities(uid_t uid);
 
 }  // namespace installd
 }  // namespace android

@@ -43,6 +43,7 @@
 #include <log/log.h>               // TODO: Move everything to base/logging.
 #include <openssl/sha.h>
 #include <private/android_filesystem_config.h>
+#include <processgroup/sched_policy.h>
 #include <selinux/android.h>
 #include <system/thread_defs.h>
 
@@ -332,8 +333,7 @@ class RunDex2Oat : public ExecVHelper {
             MapPropertyToArg("dalvik.vm.dex2oat-very-large", "--very-large-app-threshold=%s");
 
         // If the runtime was requested to use libartd.so, we'll run dex2oatd, otherwise dex2oat.
-        const char* dex2oat_bin = "/system/bin/dex2oat";
-        constexpr const char* kDex2oatDebugPath = "/system/bin/dex2oatd";
+        const char* dex2oat_bin = kDex2oatPath;
         // Do not use dex2oatd for release candidates (give dex2oat more soak time).
         bool is_release = android::base::GetProperty("ro.build.version.codename", "") == "REL";
         if (is_debug_runtime() ||
@@ -627,27 +627,6 @@ static void open_profile_files(uid_t uid, const std::string& package_name,
     }
 }
 
-static void drop_capabilities(uid_t uid) {
-    if (setgid(uid) != 0) {
-        PLOG(ERROR) << "setgid(" << uid << ") failed in installd during dexopt";
-        exit(DexoptReturnCodes::kSetGid);
-    }
-    if (setuid(uid) != 0) {
-        PLOG(ERROR) << "setuid(" << uid << ") failed in installd during dexopt";
-        exit(DexoptReturnCodes::kSetUid);
-    }
-    // drop capabilities
-    struct __user_cap_header_struct capheader;
-    struct __user_cap_data_struct capdata[2];
-    memset(&capheader, 0, sizeof(capheader));
-    memset(&capdata, 0, sizeof(capdata));
-    capheader.version = _LINUX_CAPABILITY_VERSION_3;
-    if (capset(&capheader, &capdata[0]) < 0) {
-        PLOG(ERROR) << "capset failed";
-        exit(DexoptReturnCodes::kCapSet);
-    }
-}
-
 static constexpr int PROFMAN_BIN_RETURN_CODE_COMPILE = 0;
 static constexpr int PROFMAN_BIN_RETURN_CODE_SKIP_COMPILATION = 1;
 static constexpr int PROFMAN_BIN_RETURN_CODE_BAD_PROFILES = 2;
@@ -662,8 +641,7 @@ class RunProfman : public ExecVHelper {
                   const std::vector<std::string>& dex_locations,
                   bool copy_and_update,
                   bool store_aggregation_counters) {
-        const char* profman_bin =
-                is_debug_runtime() ? "/system/bin/profmand" : "/system/bin/profman";
+        const char* profman_bin = is_debug_runtime() ? kProfmanDebugPath: kProfmanPath;
 
         if (copy_and_update) {
             CHECK_EQ(1u, profile_fds.size());
@@ -1479,9 +1457,7 @@ class RunDexoptAnalyzer : public ExecVHelper {
                     const char* class_loader_context) {
         CHECK_GE(zip_fd, 0);
         const char* dexoptanalyzer_bin =
-                is_debug_runtime()
-                        ? "/system/bin/dexoptanalyzerd"
-                        : "/system/bin/dexoptanalyzer";
+            is_debug_runtime() ? kDexoptanalyzerDebugPath : kDexoptanalyzerPath;
 
         std::string dex_file_arg = "--dex-file=" + dex_file;
         std::string oat_fd_arg = "--oat-fd=" + std::to_string(oat_fd);
