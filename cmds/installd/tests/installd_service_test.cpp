@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/statvfs.h>
+#include <sys/stat.h>
 #include <sys/xattr.h>
 
 #include <android-base/file.h>
@@ -70,27 +71,28 @@ static std::string get_full_path(const char* path) {
 
 static void mkdir(const char* path, uid_t owner, gid_t group, mode_t mode) {
     const std::string fullPath = get_full_path(path);
-    ::mkdir(fullPath.c_str(), mode);
-    ::chown(fullPath.c_str(), owner, group);
-    ::chmod(fullPath.c_str(), mode);
+    EXPECT_EQ(::mkdir(fullPath.c_str(), mode), 0);
+    EXPECT_EQ(::chown(fullPath.c_str(), owner, group), 0);
+    EXPECT_EQ(::chmod(fullPath.c_str(), mode), 0);
 }
 
 static void touch(const char* path, uid_t owner, gid_t group, mode_t mode) {
     int fd = ::open(get_full_path(path).c_str(), O_RDWR | O_CREAT, mode);
-    ::fchown(fd, owner, group);
-    ::fchmod(fd, mode);
-    ::close(fd);
+    EXPECT_NE(fd, -1);
+    EXPECT_EQ(::fchown(fd, owner, group), 0);
+    EXPECT_EQ(::fchmod(fd, mode), 0);
+    EXPECT_EQ(::close(fd), 0);
 }
 
 static int stat_gid(const char* path) {
     struct stat buf;
-    ::stat(get_full_path(path).c_str(), &buf);
+    EXPECT_EQ(::stat(get_full_path(path).c_str(), &buf), 0);
     return buf.st_gid;
 }
 
 static int stat_mode(const char* path) {
     struct stat buf;
-    ::stat(get_full_path(path).c_str(), &buf);
+    EXPECT_EQ(::stat(get_full_path(path).c_str(), &buf), 0);
     return buf.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO | S_ISGID);
 }
 
@@ -451,12 +453,12 @@ TEST_F(ServiceTest, SnapshotAppData_WrongVolumeUuid) {
 TEST_F(ServiceTest, CreateAppDataSnapshot_ClearsCache) {
   auto fake_package_ce_path = create_data_user_ce_package_path("TEST", 0, "com.foo");
   auto fake_package_de_path = create_data_user_de_package_path("TEST", 0, "com.foo");
-  auto fake_package_ce_cache_path = read_path_inode(fake_package_ce_path,
-      "cache", kXattrInodeCache);
-  auto fake_package_ce_code_cache_path = read_path_inode(fake_package_ce_path,
-      "code_cache", kXattrInodeCache);
+  auto fake_package_ce_cache_path = fake_package_ce_path + "/cache";
+  auto fake_package_ce_code_cache_path = fake_package_ce_path + "/code_cache";
   auto fake_package_de_cache_path = fake_package_de_path + "/cache";
   auto fake_package_de_code_cache_path = fake_package_de_path + "/code_cache";
+  auto rollback_ce_dir = create_data_misc_ce_rollback_path("TEST", 0);
+  auto rollback_de_dir = create_data_misc_de_rollback_path("TEST", 0);
 
   ASSERT_TRUE(mkdirs(fake_package_ce_path, 700));
   ASSERT_TRUE(mkdirs(fake_package_de_path, 700));
@@ -464,20 +466,15 @@ TEST_F(ServiceTest, CreateAppDataSnapshot_ClearsCache) {
   ASSERT_TRUE(mkdirs(fake_package_ce_code_cache_path, 700));
   ASSERT_TRUE(mkdirs(fake_package_de_cache_path, 700));
   ASSERT_TRUE(mkdirs(fake_package_de_code_cache_path, 700));
+  ASSERT_TRUE(mkdirs(rollback_ce_dir, 700));
+  ASSERT_TRUE(mkdirs(rollback_de_dir, 700));
 
   auto deleter = [&fake_package_ce_path, &fake_package_de_path,
-          &fake_package_ce_cache_path, &fake_package_ce_code_cache_path,
-          &fake_package_de_cache_path, &fake_package_de_code_cache_path]() {
+          &rollback_ce_dir, &rollback_de_dir]() {
       delete_dir_contents(fake_package_ce_path, true);
       delete_dir_contents(fake_package_de_path, true);
-      delete_dir_contents(fake_package_ce_cache_path, true);
-      delete_dir_contents(fake_package_ce_code_cache_path, true);
-      delete_dir_contents(fake_package_de_cache_path, true);
-      delete_dir_contents(fake_package_de_code_cache_path, true);
-      rmdir(fake_package_ce_cache_path.c_str());
-      rmdir(fake_package_ce_code_cache_path.c_str());
-      rmdir(fake_package_de_cache_path.c_str());
-      rmdir(fake_package_de_code_cache_path.c_str());
+      delete_dir_contents_and_dir(rollback_ce_dir, true);
+      delete_dir_contents_and_dir(rollback_de_dir, true);
   };
   auto scope_guard = android::base::make_scope_guard(deleter);
 
