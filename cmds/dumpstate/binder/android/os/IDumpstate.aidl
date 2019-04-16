@@ -36,6 +36,9 @@ interface IDumpstate {
     IDumpstateToken setListener(@utf8InCpp String name, IDumpstateListener listener,
                                 boolean getSectionDetails);
 
+    // NOTE: If you add to or change these modes, please also change the corresponding enums
+    // in system server, in BugreportParams.java.
+
     // These modes encapsulate a set of run time options for generating bugreports.
     // Takes a bugreport without user interference.
     const int BUGREPORT_MODE_FULL = 0;
@@ -58,7 +61,6 @@ interface IDumpstate {
     // Default mode.
     const int BUGREPORT_MODE_DEFAULT = 6;
 
-    // TODO(b/111441001): Should the args be for the consuming application rather than triggering?
     /*
      * Starts a bugreport in the background.
      *
@@ -71,7 +73,7 @@ interface IDumpstate {
      * @param callingUid UID of the original application that requested the report.
      * @param callingPackage package of the original application that requested the report.
      * @param bugreportFd the file to which the zipped bugreport should be written
-     * @param screenshotFd the file to which screenshot should be written; optional
+     * @param screenshotFd the file to which screenshot should be written
      * @param bugreportMode the mode that specifies other run time options; must be one of above
      * @param listener callback for updates; optional
      */
