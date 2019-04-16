@@ -34,6 +34,7 @@ cc_defaults {
         "libprocessgroup",
         "libselinux",
         "libutils",
+        "server_configurable_flags",
     ],
 
     product_variables: {
@@ -144,9 +145,11 @@ cc_binary {
     ],
     shared_libs: [
         "libbase",
+        "libbinder",
         "liblog",
         "libprotobuf-cpp-full",
         "libselinux",
+        "libutils",
         "libziparchive",
     ],
     static_libs: [
@@ -155,6 +158,7 @@ cc_binary {
         "lib_apex_manifest_proto",
         "libavb",
         "libdm",
+        "libvold_binder",
     ],
 }
 
@@ -225,6 +229,7 @@ cc_binary {
         "libprocessgroup",
         "libselinux",
         "libutils",
+        "server_configurable_flags",
     ],
 }
 
