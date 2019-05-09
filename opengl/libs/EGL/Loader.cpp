@@ -317,6 +317,12 @@ void Loader::init_api(void* dso,
     }
 }
 
+static const char* RO_HARDWARE_EGL_PROPERTY = "ro.hardware.egl";
+static const char* HAL_SUBNAME_KEY_PROPERTIES[2] = {
+        RO_HARDWARE_EGL_PROPERTY,
+        "ro.board.platform",
+};
+
 static void* load_system_driver(const char* kind) {
     ATRACE_CALL();
     class MatchFile {
@@ -353,7 +359,6 @@ static void* load_system_driver(const char* kind) {
                     break;
             }
 
-            std::string pattern = std::string("lib") + kind;
             const char* const searchPaths[] = {
 #if defined(__LP64__)
                     "/vendor/lib64/egl",
@@ -367,10 +372,42 @@ static void* load_system_driver(const char* kind) {
             // first, we search for the exact name of the GLES userspace
             // driver in both locations.
             // i.e.:
+            //      libGLES_${prop}.so, or:
+            //      libEGL_${prop}.so, libGLESv1_CM_${prop}.so, libGLESv2_${prop}.so
+            char prop[PROPERTY_VALUE_MAX + 1];
+            for (auto key : HAL_SUBNAME_KEY_PROPERTIES) {
+                if (property_get(key, prop, nullptr) <= 0) {
+                    continue;
+                }
+                std::string pattern = std::string("lib") + kind + "_" + prop;
+                for (auto dir : searchPaths) {
+                    if (find(result, pattern, dir, true)) {
+                        return result;
+                    }
+                }
+                // If ro.hardware.egl was set and we didn't find the driver:
+                //   * The driver may be present with a different kind
+                //   * The configuration is broken
+                // Either way, we don't want to continue and load the wrong
+                // driver.
+                //
+                // ro.board.platform is very likely to be set, so it will have
+                // to match the first kind to avoid the fallback.
+                if (key == RO_HARDWARE_EGL_PROPERTY) {
+                    result.clear();
+                    return result;
+                }
+            }
+
+            // second, we search for the exact name of the GLES userspace
+            // driver in both locations.
+            // i.e.:
             //      libGLES.so, or:
             //      libEGL.so, libGLESv1_CM.so, libGLESv2.so
 
-            for (size_t i=0 ; i<NELEM(searchPaths) ; i++) {
+            std::string pattern = std::string("lib") + kind;
+
+            for (size_t i = 0; i < NELEM(searchPaths); i++) {
                 if (find(result, pattern, searchPaths[i], true)) {
                     return result;
                 }
@@ -455,11 +492,6 @@ static void* load_system_driver(const char* kind) {
     return dso;
 }
 
-static const char* HAL_SUBNAME_KEY_PROPERTIES[2] = {
-    "ro.hardware.egl",
-    "ro.board.platform",
-};
-
 static void* load_updated_driver(const char* kind, android_namespace_t* ns) {
     ATRACE_CALL();
     const android_dlextinfo dlextinfo = {
@@ -469,12 +501,17 @@ static void* load_updated_driver(const char* kind, android_namespace_t* ns) {
     void* so = nullptr;
     char prop[PROPERTY_VALUE_MAX + 1];
     for (auto key : HAL_SUBNAME_KEY_PROPERTIES) {
-        if (property_get(key, prop, nullptr) > 0) {
-            std::string name = std::string("lib") + kind + "_" + prop + ".so";
-            so = do_android_dlopen_ext(name.c_str(), RTLD_LOCAL | RTLD_NOW, &dlextinfo);
-            if (so) {
-                return so;
-            }
+        if (property_get(key, prop, nullptr) <= 0) {
+          continue;
+        }
+        std::string name = std::string("lib") + kind + "_" + prop + ".so";
+        so = do_android_dlopen_ext(name.c_str(), RTLD_LOCAL | RTLD_NOW, &dlextinfo);
+        if (so) {
+            return so;
+        }
+        // Don't fall back if ro.hardware.egl was set
+        if (key == RO_HARDWARE_EGL_PROPERTY) {
+            return nullptr;
         }
     }
     return nullptr;
