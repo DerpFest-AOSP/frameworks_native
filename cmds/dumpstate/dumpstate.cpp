@@ -401,7 +401,7 @@ static void dump_dev_files(const char *title, const char *driverpath, const char
 // 2. send a SIGUSR1 to its pid which will dump anrd's trace.
 // 3. wait until the trace generation completes and add to the zip file.
 static bool dump_anrd_trace() {
-    unsigned int pid;
+    int pid;
     char buf[50], path[PATH_MAX];
     struct dirent *trace;
     struct stat st;
@@ -428,7 +428,7 @@ static bool dump_anrd_trace() {
         }
 
         // send SIGUSR1 to the anrd to generate a trace.
-        sprintf(buf, "%u", pid);
+        sprintf(buf, "%d", pid);
         if (RunCommand("ANRD_DUMP", {"kill", "-SIGUSR1", buf},
                        CommandOptions::WithTimeout(1).Build())) {
             MYLOGE("anrd signal timed out. Please manually collect trace\n");
@@ -1232,7 +1232,7 @@ static void DumpHals() {
     }
     DurationReporter duration_reporter("DUMP HALS");
     RunCommand("HARDWARE HALS", {"lshal", "-lVSietrpc", "--types=b,c,l,z"},
-               CommandOptions::WithTimeout(2).AsRootIfAvailable().Build());
+               CommandOptions::WithTimeout(10).AsRootIfAvailable().Build());
 
     using android::hidl::manager::V1_0::IServiceManager;
     using android::hardware::defaultServiceManager;
@@ -2690,7 +2690,15 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
             MYLOGI(
                 "Did not receive user consent yet."
                 " Will not copy the bugreport artifacts to caller.\n");
-            // TODO(b/111441001): cancel outstanding requests
+            const String16 incidentcompanion("incidentcompanion");
+            sp<android::IBinder> ics(defaultServiceManager()->getService(incidentcompanion));
+            if (ics != nullptr) {
+                MYLOGD("Canceling user consent request via incidentcompanion service\n");
+                android::interface_cast<android::os::IIncidentCompanion>(ics)->cancelAuthorization(
+                        consent_callback_.get());
+            } else {
+                MYLOGD("Unable to cancel user consent; incidentcompanion service unavailable\n");
+            }
         }
     }
 
