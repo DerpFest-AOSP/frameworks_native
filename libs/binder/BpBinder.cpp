@@ -148,6 +148,10 @@ BpBinder::BpBinder(int32_t handle, int32_t trackedUid)
     IPCThreadState::self()->incWeakHandle(handle, this);
 }
 
+int32_t BpBinder::handle() const {
+    return mHandle;
+}
+
 bool BpBinder::isDescriptorCached() const {
     Mutex::Autolock _l(mLock);
     return mDescriptorCache.size() ? true : false;
@@ -186,10 +190,7 @@ status_t BpBinder::pingBinder()
 {
     Parcel send;
     Parcel reply;
-    status_t err = transact(PING_TRANSACTION, send, &reply);
-    if (err != NO_ERROR) return err;
-    if (reply.dataSize() < sizeof(status_t)) return NOT_ENOUGH_DATA;
-    return (status_t)reply.readInt32();
+    return transact(PING_TRANSACTION, send, &reply);
 }
 
 status_t BpBinder::dump(int fd, const Vector<String16>& args)
@@ -387,21 +388,6 @@ BpBinder::~BpBinder()
         }
     }
 
-    mLock.lock();
-    Vector<Obituary>* obits = mObituaries;
-    if(obits != nullptr) {
-        if (ipc) ipc->clearDeathNotification(mHandle, this);
-        mObituaries = nullptr;
-    }
-    mLock.unlock();
-
-    if (obits != nullptr) {
-        // XXX Should we tell any remaining DeathRecipient
-        // objects that the last strong ref has gone away, so they
-        // are no longer linked?
-        delete obits;
-    }
-
     if (ipc) {
         ipc->expungeHandle(mHandle, this);
         ipc->decWeakHandle(mHandle);
@@ -423,6 +409,25 @@ void BpBinder::onLastStrongRef(const void* /*id*/)
     }
     IPCThreadState* ipc = IPCThreadState::self();
     if (ipc) ipc->decStrongHandle(mHandle);
+
+    mLock.lock();
+    Vector<Obituary>* obits = mObituaries;
+    if(obits != nullptr) {
+        if (!obits->isEmpty()) {
+            ALOGI("onLastStrongRef automatically unlinking death recipients");
+        }
+
+        if (ipc) ipc->clearDeathNotification(mHandle, this);
+        mObituaries = nullptr;
+    }
+    mLock.unlock();
+
+    if (obits != nullptr) {
+        // XXX Should we tell any remaining DeathRecipient
+        // objects that the last strong ref has gone away, so they
+        // are no longer linked?
+        delete obits;
+    }
 }
 
 bool BpBinder::onIncStrongAttempted(uint32_t /*flags*/, const void* /*id*/)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 The Android Open Source Project
+ * Copyright (C) 2019 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,38 +16,34 @@
 
 #pragma once
 
+#include <string>
+
 #include <android-base/macros.h>
-#include <ostream>
-#include <utils/Errors.h>
-#include <utils/RefBase.h>
+
+#include "Command.h"
+#include "utils.h"
 
 namespace android {
 namespace lshal {
 
-/* Creates an AF_UNIX socketpair and spawns a thread that relays any data
- * written to the "write"-end of the pair to the specified output stream "os".
- */
-struct PipeRelay {
-    explicit PipeRelay(std::ostream &os);
-    ~PipeRelay();
+class Lshal;
 
-    status_t initCheck() const;
-
-    // Returns the file descriptor corresponding to the "write"-end of the
-    // connection.
-    int fd() const;
-
+class WaitCommand : public Command {
+public:
+    explicit WaitCommand(Lshal &lshal) : Command(lshal) {}
+    ~WaitCommand() = default;
+    Status main(const Arg &arg) override;
+    void usage() const override;
+    std::string getSimpleDescription() const override;
+    std::string getName() const override;
 private:
-    struct RelayThread;
+    Status parseArgs(const Arg &arg);
 
-    status_t mInitCheck;
-    int mFds[2];
-    sp<RelayThread> mThread;
+    std::string mInterfaceName;
 
-    static void CloseFd(int *fd);
-
-    DISALLOW_COPY_AND_ASSIGN(PipeRelay);
+    DISALLOW_COPY_AND_ASSIGN(WaitCommand);
 };
+
 
 }  // namespace lshal
 }  // namespace android
