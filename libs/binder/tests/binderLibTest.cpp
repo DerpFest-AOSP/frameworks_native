@@ -66,7 +66,6 @@ enum BinderLibTestTranscationCode {
     BINDER_LIB_TEST_LINK_DEATH_TRANSACTION,
     BINDER_LIB_TEST_WRITE_FILE_TRANSACTION,
     BINDER_LIB_TEST_WRITE_PARCEL_FILE_DESCRIPTOR_TRANSACTION,
-    BINDER_LIB_TEST_PROMOTE_WEAK_REF_TRANSACTION,
     BINDER_LIB_TEST_EXIT_TRANSACTION,
     BINDER_LIB_TEST_DELAYED_EXIT_TRANSACTION,
     BINDER_LIB_TEST_GET_PTR_SIZE_TRANSACTION,
@@ -767,22 +766,6 @@ TEST_F(BinderLibTest, PromoteLocal) {
     EXPECT_TRUE(strong_from_weak == nullptr);
 }
 
-TEST_F(BinderLibTest, PromoteRemote) {
-    int ret;
-    Parcel data, reply;
-    sp<IBinder> strong = new BBinder();
-    sp<IBinder> server = addServer();
-
-    ASSERT_TRUE(server != nullptr);
-    ASSERT_TRUE(strong != nullptr);
-
-    ret = data.writeWeakBinder(strong);
-    EXPECT_EQ(NO_ERROR, ret);
-
-    ret = server->transact(BINDER_LIB_TEST_PROMOTE_WEAK_REF_TRANSACTION, data, &reply);
-    EXPECT_GE(ret, 0);
-}
-
 TEST_F(BinderLibTest, CheckHandleZeroBinderHighBitsZeroCookie) {
     status_t ret;
     Parcel data, reply;
@@ -808,7 +791,6 @@ TEST_F(BinderLibTest, FreedBinder) {
     wp<IBinder> keepFreedBinder;
     {
         Parcel data, reply;
-        data.writeBool(false); /* request weak reference */
         ret = server->transact(BINDER_LIB_TEST_CREATE_BINDER_TRANSACTION, data, &reply);
         ASSERT_EQ(NO_ERROR, ret);
         struct flat_binder_object *freed = (struct flat_binder_object *)(reply.data());
@@ -817,8 +799,9 @@ TEST_F(BinderLibTest, FreedBinder) {
          * delete its reference to it - otherwise the transaction
          * fails regardless of whether the driver is fixed.
          */
-        keepFreedBinder = reply.readWeakBinder();
+        keepFreedBinder = reply.readStrongBinder();
     }
+    IPCThreadState::self()->flushCommands();
     {
         Parcel data, reply;
         data.writeStrongBinder(server);
@@ -954,7 +937,6 @@ class BinderLibTestService : public BBinder
             case BINDER_LIB_TEST_ADD_POLL_SERVER:
             case BINDER_LIB_TEST_ADD_SERVER: {
                 int ret;
-                uint8_t buf[1] = { 0 };
                 int serverid;
 
                 if (m_id != 0) {
@@ -1152,29 +1134,6 @@ class BinderLibTestService : public BBinder
                 if (ret != size) return UNKNOWN_ERROR;
                 return NO_ERROR;
             }
-            case BINDER_LIB_TEST_PROMOTE_WEAK_REF_TRANSACTION: {
-                int ret;
-                wp<IBinder> weak;
-                sp<IBinder> strong;
-                Parcel data2, reply2;
-                sp<IServiceManager> sm = defaultServiceManager();
-                sp<IBinder> server = sm->getService(binderLibTestServiceName);
-
-                weak = data.readWeakBinder();
-                if (weak == nullptr) {
-                    return BAD_VALUE;
-                }
-                strong = weak.promote();
-
-                ret = server->transact(BINDER_LIB_TEST_NOP_TRANSACTION, data2, &reply2);
-                if (ret != NO_ERROR)
-                    exit(EXIT_FAILURE);
-
-                if (strong == nullptr) {
-                    reply->setError(1);
-                }
-                return NO_ERROR;
-            }
             case BINDER_LIB_TEST_DELAYED_EXIT_TRANSACTION:
                 alarm(10);
                 return NO_ERROR;
@@ -1183,13 +1142,8 @@ class BinderLibTestService : public BBinder
                     ;
                 exit(EXIT_SUCCESS);
             case BINDER_LIB_TEST_CREATE_BINDER_TRANSACTION: {
-                bool strongRef = data.readBool();
                 sp<IBinder> binder = new BBinder();
-                if (strongRef) {
-                    reply->writeStrongBinder(binder);
-                } else {
-                    reply->writeWeakBinder(binder);
-                }
+                reply->writeStrongBinder(binder);
                 return NO_ERROR;
             }
             default:
@@ -1204,7 +1158,6 @@ class BinderLibTestService : public BBinder
         bool m_serverStartRequested;
         sp<IBinder> m_serverStarted;
         sp<IBinder> m_strongRef;
-        bool m_callbackPending;
         sp<IBinder> m_callback;
 };
 
@@ -1266,7 +1219,7 @@ int run_server(int index, int readypipefd, bool usePoll)
               * We simulate a single-threaded process using the binder poll
               * interface; besides handling binder commands, it can also
               * issue outgoing transactions, by storing a callback in
-              * m_callback and setting m_callbackPending.
+              * m_callback.
               *
               * processPendingCall() will then issue that transaction.
               */
@@ -1293,8 +1246,6 @@ int run_server(int index, int readypipefd, bool usePoll)
 }
 
 int main(int argc, char **argv) {
-    int ret;
-
     if (argc == 4 && !strcmp(argv[1], "--servername")) {
         binderservername = argv[2];
     } else {
