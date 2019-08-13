@@ -19,8 +19,6 @@ cc_defaults {
     cflags: [
         "-Wall",
         "-Werror",
-        "-Wno-unused-private-field",
-        "-Wno-unused-variable",
     ],
 }
 
@@ -137,5 +135,33 @@ cc_test {
         "liblog",
         "libutils",
     ],
+    test_suites: ["device-tests"],
+}
+
+aidl_interface {
+    name: "binderStabilityTestIface",
+    srcs: [
+        "IBinderStabilityTest.aidl",
+    ],
+}
+
+cc_test {
+    name: "binderStabilityTest",
+    defaults: ["binder_test_defaults"],
+    srcs: [
+        "binderStabilityTest.cpp",
+    ],
+
+    shared_libs: [
+        "libbinder_ndk",
+        "libbinder",
+        "liblog",
+        "libutils",
+    ],
+    static_libs: [
+        "binderStabilityTestIface-cpp",
+        "binderStabilityTestIface-ndk_platform",
+    ],
+
     test_suites: ["device-tests"],
 }
