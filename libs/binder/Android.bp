@@ -70,10 +70,10 @@ cc_library_shared {
         "ProcessInfoService.cpp",
         "ProcessState.cpp",
         "Static.cpp",
+        "Stability.cpp",
         "Status.cpp",
         "TextOutput.cpp",
         "IpPrefix.cpp",
-        "Value.cpp",
         ":libbinder_aidl",
     ],
 
@@ -115,7 +115,6 @@ cc_library_shared {
     },
 
     shared_libs: [
-        "libbase",
         "liblog",
         "libcutils",
         "libutils",
@@ -142,6 +141,7 @@ filegroup {
     srcs: [
         "aidl/android/content/pm/IPackageManagerNative.aidl",
     ],
+    path: "aidl",
 }
 
 subdirs = ["tests"]
