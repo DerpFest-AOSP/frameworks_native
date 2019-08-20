@@ -115,8 +115,9 @@ static const int32_t WEIGHT_FILE = 5;
 // TODO: temporary variables and functions used during C++ refactoring
 static Dumpstate& ds = Dumpstate::GetInstance();
 static int RunCommand(const std::string& title, const std::vector<std::string>& full_command,
-                      const CommandOptions& options = CommandOptions::DEFAULT) {
-    return ds.RunCommand(title, full_command, options);
+                      const CommandOptions& options = CommandOptions::DEFAULT,
+                      bool verbose_duration = false) {
+    return ds.RunCommand(title, full_command, options, verbose_duration);
 }
 
 // Reasonable value for max stats.
@@ -867,17 +868,17 @@ static void DoLogcat() {
     RunCommand(
         "EVENT LOG",
         {"logcat", "-b", "events", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v"},
-        CommandOptions::WithTimeoutInMs(timeout_ms).Build());
+        CommandOptions::WithTimeoutInMs(timeout_ms).Build(), true /* verbose_duration */);
     timeout_ms = logcat_timeout({"stats"});
     RunCommand(
         "STATS LOG",
         {"logcat", "-b", "stats", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v"},
-        CommandOptions::WithTimeoutInMs(timeout_ms).Build());
+        CommandOptions::WithTimeoutInMs(timeout_ms).Build(), true /* verbose_duration */);
     timeout_ms = logcat_timeout({"radio"});
     RunCommand(
         "RADIO LOG",
         {"logcat", "-b", "radio", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v"},
-        CommandOptions::WithTimeoutInMs(timeout_ms).Build());
+        CommandOptions::WithTimeoutInMs(timeout_ms).Build(), true /* verbose_duration */);
 
     RunCommand("LOG STATISTICS", {"logcat", "-b", "all", "-S"});
 
@@ -1255,7 +1256,6 @@ static Dumpstate::RunStatus dumpstate() {
     dump_dev_files("TRUSTY VERSION", "/sys/bus/platform/drivers/trusty", "trusty_version");
     RunCommand("UPTIME", {"uptime"});
     DumpBlockStatFiles();
-    dump_emmc_ecsd("/d/mmc0/mmc0:0001/ext_csd");
     DumpFile("MEMORY INFO", "/proc/meminfo");
     RunCommand("CPU INFO", {"top", "-b", "-n", "1", "-H", "-s", "6", "-o",
                             "pid,tid,user,pr,ni,%cpu,s,virt,res,pcy,cmd,name"});
@@ -1509,6 +1509,8 @@ static Dumpstate::RunStatus DumpstateDefault() {
 static void DumpstateRadioCommon() {
     DumpIpTablesAsRoot();
 
+    ds.AddDir(LOGPERSIST_DATA_DIR, false);
+
     if (!DropRootUser()) {
         return;
     }
@@ -1519,6 +1521,7 @@ static void DumpstateRadioCommon() {
     DoKmsg();
     DumpIpAddrAndRules();
     dump_route_tables();
+    DumpHals();
 
     RunDumpsys("NETWORK DIAGNOSTICS", {"connectivity", "--diag"},
                CommandOptions::WithTimeout(10).Build());
@@ -1587,8 +1590,6 @@ static void DumpstateWifiOnly() {
                SEC_TO_MSEC(10));
     RunDumpsys("DUMPSYS", {"wifi"}, CommandOptions::WithTimeout(90).Build(),
                SEC_TO_MSEC(10));
-
-    DumpHals();
 
     printf("========================================================\n");
     printf("== dumpstate: done (id %d)\n", ds.id_);
@@ -2814,8 +2815,8 @@ Dumpstate& Dumpstate::GetInstance() {
     return singleton_;
 }
 
-DurationReporter::DurationReporter(const std::string& title, bool logcat_only)
-    : title_(title), logcat_only_(logcat_only) {
+DurationReporter::DurationReporter(const std::string& title, bool logcat_only, bool verbose)
+    : title_(title), logcat_only_(logcat_only), verbose_(verbose) {
     if (!title_.empty()) {
         started_ = Nanotime();
     }
@@ -2824,7 +2825,7 @@ DurationReporter::DurationReporter(const std::string& title, bool logcat_only)
 DurationReporter::~DurationReporter() {
     if (!title_.empty()) {
         float elapsed = (float)(Nanotime() - started_) / NANOS_PER_SEC;
-        if (elapsed < .5f) {
+        if (elapsed < .5f && !verbose_) {
             return;
         }
         MYLOGD("Duration of '%s': %.2fs\n", title_.c_str(), elapsed);
@@ -3417,8 +3418,8 @@ int dump_file_from_fd(const char *title, const char *path, int fd) {
 }
 
 int Dumpstate::RunCommand(const std::string& title, const std::vector<std::string>& full_command,
-                          const CommandOptions& options) {
-    DurationReporter duration_reporter(title);
+                          const CommandOptions& options, bool verbose_duration) {
+    DurationReporter duration_reporter(title, false /* logcat_only */, verbose_duration);
 
     int status = RunCommandToFd(STDOUT_FILENO, title, full_command, options);
 
@@ -3629,110 +3630,3 @@ time_t get_mtime(int fd, time_t default_mtime) {
     }
     return info.st_mtime;
 }
-
-void dump_emmc_ecsd(const char *ext_csd_path) {
-    // List of interesting offsets
-    struct hex {
-        char str[2];
-    };
-    static const size_t EXT_CSD_REV = 192 * sizeof(hex);
-    static const size_t EXT_PRE_EOL_INFO = 267 * sizeof(hex);
-    static const size_t EXT_DEVICE_LIFE_TIME_EST_TYP_A = 268 * sizeof(hex);
-    static const size_t EXT_DEVICE_LIFE_TIME_EST_TYP_B = 269 * sizeof(hex);
-
-    std::string buffer;
-    if (!android::base::ReadFileToString(ext_csd_path, &buffer)) {
-        return;
-    }
-
-    printf("------ %s Extended CSD ------\n", ext_csd_path);
-
-    if (buffer.length() < (EXT_CSD_REV + sizeof(hex))) {
-        printf("*** %s: truncated content %zu\n\n", ext_csd_path, buffer.length());
-        return;
-    }
-
-    int ext_csd_rev = 0;
-    std::string sub = buffer.substr(EXT_CSD_REV, sizeof(hex));
-    if (sscanf(sub.c_str(), "%2x", &ext_csd_rev) != 1) {
-        printf("*** %s: EXT_CSD_REV parse error \"%s\"\n\n", ext_csd_path, sub.c_str());
-        return;
-    }
-
-    static const char *ver_str[] = {
-        "4.0", "4.1", "4.2", "4.3", "Obsolete", "4.41", "4.5", "5.0"
-    };
-    printf("rev 1.%d (MMC %s)\n", ext_csd_rev,
-           (ext_csd_rev < (int)(sizeof(ver_str) / sizeof(ver_str[0]))) ? ver_str[ext_csd_rev]
-                                                                       : "Unknown");
-    if (ext_csd_rev < 7) {
-        printf("\n");
-        return;
-    }
-
-    if (buffer.length() < (EXT_PRE_EOL_INFO + sizeof(hex))) {
-        printf("*** %s: truncated content %zu\n\n", ext_csd_path, buffer.length());
-        return;
-    }
-
-    int ext_pre_eol_info = 0;
-    sub = buffer.substr(EXT_PRE_EOL_INFO, sizeof(hex));
-    if (sscanf(sub.c_str(), "%2x", &ext_pre_eol_info) != 1) {
-        printf("*** %s: PRE_EOL_INFO parse error \"%s\"\n\n", ext_csd_path, sub.c_str());
-        return;
-    }
-
-    static const char *eol_str[] = {
-        "Undefined",
-        "Normal",
-        "Warning (consumed 80% of reserve)",
-        "Urgent (consumed 90% of reserve)"
-    };
-    printf(
-        "PRE_EOL_INFO %d (MMC %s)\n", ext_pre_eol_info,
-        eol_str[(ext_pre_eol_info < (int)(sizeof(eol_str) / sizeof(eol_str[0]))) ? ext_pre_eol_info
-                                                                                 : 0]);
-
-    for (size_t lifetime = EXT_DEVICE_LIFE_TIME_EST_TYP_A;
-            lifetime <= EXT_DEVICE_LIFE_TIME_EST_TYP_B;
-            lifetime += sizeof(hex)) {
-        int ext_device_life_time_est;
-        static const char *est_str[] = {
-            "Undefined",
-            "0-10% of device lifetime used",
-            "10-20% of device lifetime used",
-            "20-30% of device lifetime used",
-            "30-40% of device lifetime used",
-            "40-50% of device lifetime used",
-            "50-60% of device lifetime used",
-            "60-70% of device lifetime used",
-            "70-80% of device lifetime used",
-            "80-90% of device lifetime used",
-            "90-100% of device lifetime used",
-            "Exceeded the maximum estimated device lifetime",
-        };
-
-        if (buffer.length() < (lifetime + sizeof(hex))) {
-            printf("*** %s: truncated content %zu\n", ext_csd_path, buffer.length());
-            break;
-        }
-
-        ext_device_life_time_est = 0;
-        sub = buffer.substr(lifetime, sizeof(hex));
-        if (sscanf(sub.c_str(), "%2x", &ext_device_life_time_est) != 1) {
-            printf("*** %s: DEVICE_LIFE_TIME_EST_TYP_%c parse error \"%s\"\n", ext_csd_path,
-                   (unsigned)((lifetime - EXT_DEVICE_LIFE_TIME_EST_TYP_A) / sizeof(hex)) + 'A',
-                   sub.c_str());
-            continue;
-        }
-        printf("DEVICE_LIFE_TIME_EST_TYP_%c %d (MMC %s)\n",
-               (unsigned)((lifetime - EXT_DEVICE_LIFE_TIME_EST_TYP_A) / sizeof(hex)) + 'A',
-               ext_device_life_time_est,
-               est_str[(ext_device_life_time_est < (int)(sizeof(est_str) / sizeof(est_str[0])))
-                           ? ext_device_life_time_est
-                           : 0]);
-    }
-
-    printf("\n");
-}
-
