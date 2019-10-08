@@ -19,6 +19,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <libgen.h>
 #include <limits.h>
 #include <math.h>
@@ -43,10 +44,12 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <functional>
 #include <future>
 #include <memory>
+#include <numeric>
 #include <regex>
 #include <set>
 #include <string>
@@ -59,9 +62,11 @@
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
+#include <android/content/pm/IPackageManagerNative.h>
 #include <android/hardware/dumpstate/1.0/IDumpstateDevice.h>
 #include <android/hidl/manager/1.0/IServiceManager.h>
 #include <android/os/IIncidentCompanion.h>
+#include <binder/IServiceManager.h>
 #include <cutils/native_handle.h>
 #include <cutils/properties.h>
 #include <cutils/sockets.h>
@@ -113,8 +118,9 @@ static const int32_t WEIGHT_FILE = 5;
 // TODO: temporary variables and functions used during C++ refactoring
 static Dumpstate& ds = Dumpstate::GetInstance();
 static int RunCommand(const std::string& title, const std::vector<std::string>& full_command,
-                      const CommandOptions& options = CommandOptions::DEFAULT) {
-    return ds.RunCommand(title, full_command, options);
+                      const CommandOptions& options = CommandOptions::DEFAULT,
+                      bool verbose_duration = false) {
+    return ds.RunCommand(title, full_command, options, verbose_duration);
 }
 
 // Reasonable value for max stats.
@@ -234,6 +240,30 @@ static bool IsFileEmpty(const std::string& file_path) {
     return file.tellg() <= 0;
 }
 
+int64_t GetModuleMetadataVersion() {
+    auto binder = defaultServiceManager()->getService(android::String16("package_native"));
+    if (binder == nullptr) {
+        MYLOGE("Failed to retrieve package_native service");
+        return 0L;
+    }
+    auto package_service = android::interface_cast<content::pm::IPackageManagerNative>(binder);
+    std::string package_name;
+    auto status = package_service->getModuleMetadataPackageName(&package_name);
+    if (!status.isOk()) {
+        MYLOGE("Failed to retrieve module metadata package name: %s", status.toString8().c_str());
+        return 0L;
+    }
+    MYLOGD("Module metadata package name: %s", package_name.c_str());
+    int64_t version_code;
+    status = package_service->getVersionCodeForPackage(android::String16(package_name.c_str()),
+                                                       &version_code);
+    if (!status.isOk()) {
+        MYLOGE("Failed to retrieve module metadata version: %s", status.toString8().c_str());
+        return 0L;
+    }
+    return version_code;
+}
+
 }  // namespace
 }  // namespace os
 }  // namespace android
@@ -270,12 +300,10 @@ static const CommandOptions AS_ROOT_20 = CommandOptions::WithTimeout(20).AsRoot(
  * Returns a vector of dump fds under |dir_path| with a given |file_prefix|.
  * The returned vector is sorted by the mtimes of the dumps. If |limit_by_mtime|
  * is set, the vector only contains files that were written in the last 30 minutes.
- * If |limit_by_count| is set, the vector only contains the ten latest files.
  */
 static std::vector<DumpData> GetDumpFds(const std::string& dir_path,
                                         const std::string& file_prefix,
-                                        bool limit_by_mtime,
-                                        bool limit_by_count = true) {
+                                        bool limit_by_mtime) {
     const time_t thirty_minutes_ago = ds.now_ - 60 * 30;
 
     std::unique_ptr<DIR, decltype(&closedir)> dump_dir(opendir(dir_path.c_str()), closedir);
@@ -317,15 +345,6 @@ static std::vector<DumpData> GetDumpFds(const std::string& dir_path,
         }
 
         dump_data.emplace_back(DumpData{abs_path, std::move(fd), st.st_mtime});
-    }
-
-    // Sort in descending modification time so that we only keep the newest
-    // reports if |limit_by_count| is true.
-    std::sort(dump_data.begin(), dump_data.end(),
-              [](const DumpData& d1, const DumpData& d2) { return d1.mtime > d2.mtime; });
-
-    if (limit_by_count && dump_data.size() > 10) {
-        dump_data.erase(dump_data.begin() + 10, dump_data.end());
     }
 
     return dump_data;
@@ -665,6 +684,10 @@ void Dumpstate::PrintHeader() const {
     printf("Bootloader: %s\n", bootloader.c_str());
     printf("Radio: %s\n", radio.c_str());
     printf("Network: %s\n", network.c_str());
+    int64_t module_metadata_version = android::os::GetModuleMetadataVersion();
+    if (module_metadata_version != 0) {
+        printf("Module Metadata version: %" PRId64 "\n", module_metadata_version);
+    }
 
     printf("Kernel: ");
     DumpFileToFd(STDOUT_FILENO, "", "/proc/version");
@@ -865,23 +888,48 @@ static void DoLogcat() {
     RunCommand(
         "EVENT LOG",
         {"logcat", "-b", "events", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v"},
-        CommandOptions::WithTimeoutInMs(timeout_ms).Build());
+        CommandOptions::WithTimeoutInMs(timeout_ms).Build(), true /* verbose_duration */);
     timeout_ms = logcat_timeout({"stats"});
     RunCommand(
         "STATS LOG",
         {"logcat", "-b", "stats", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v"},
-        CommandOptions::WithTimeoutInMs(timeout_ms).Build());
+        CommandOptions::WithTimeoutInMs(timeout_ms).Build(), true /* verbose_duration */);
     timeout_ms = logcat_timeout({"radio"});
     RunCommand(
         "RADIO LOG",
         {"logcat", "-b", "radio", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v"},
-        CommandOptions::WithTimeoutInMs(timeout_ms).Build());
+        CommandOptions::WithTimeoutInMs(timeout_ms).Build(), true /* verbose_duration */);
 
     RunCommand("LOG STATISTICS", {"logcat", "-b", "all", "-S"});
 
     /* kernels must set CONFIG_PSTORE_PMSG, slice up pstore with device tree */
     RunCommand("LAST LOGCAT", {"logcat", "-L", "-b", "all", "-v", "threadtime", "-v", "printable",
                                "-v", "uid", "-d", "*:v"});
+}
+
+static void DumpIncidentReport() {
+    if (!ds.IsZipping()) {
+        MYLOGD("Not dumping incident report because it's not a zipped bugreport\n");
+        return;
+    }
+    DurationReporter duration_reporter("INCIDENT REPORT");
+    const std::string path = ds.bugreport_internal_dir_ + "/tmp_incident_report";
+    auto fd = android::base::unique_fd(TEMP_FAILURE_RETRY(open(path.c_str(),
+                O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+                S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)));
+    if (fd < 0) {
+        MYLOGE("Could not open %s to dump incident report.\n", path.c_str());
+        return;
+    }
+    RunCommandToFd(fd, "", {"incident", "-u"}, CommandOptions::WithTimeout(120).Build());
+    bool empty = 0 == lseek(fd, 0, SEEK_END);
+    if (!empty) {
+        // Use a different name from "incident.proto"
+        // /proto/incident.proto is reserved for incident service dump
+        // i.e. metadata for debugging.
+        ds.AddZipEntry(kProtoPath + "incident_report" + kProtoExt, path);
+    }
+    unlink(path.c_str());
 }
 
 static void DumpIpTablesAsRoot() {
@@ -893,6 +941,14 @@ static void DumpIpTablesAsRoot() {
     RunCommand("IP6TABLES MANGLE", {"ip6tables", "-t", "mangle", "-L", "-nvx"});
     RunCommand("IPTABLES RAW", {"iptables", "-t", "raw", "-L", "-nvx"});
     RunCommand("IP6TABLES RAW", {"ip6tables", "-t", "raw", "-L", "-nvx"});
+}
+
+static void DumpDynamicPartitionInfo() {
+    if (!::android::base::GetBoolProperty("ro.boot.dynamic_partitions", false)) {
+        return;
+    }
+
+    RunCommand("LPDUMP", {"lpdump", "--all"});
 }
 
 static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_dir) {
@@ -1201,6 +1257,45 @@ static void DumpHals() {
     }
 }
 
+static void DumpExternalFragmentationInfo() {
+    struct stat st;
+    if (stat("/proc/buddyinfo", &st) != 0) {
+        MYLOGE("Unable to dump external fragmentation info\n");
+        return;
+    }
+
+    printf("------ EXTERNAL FRAGMENTATION INFO ------\n");
+    std::ifstream ifs("/proc/buddyinfo");
+    auto unusable_index_regex = std::regex{"Node\\s+([0-9]+),\\s+zone\\s+(\\S+)\\s+(.*)"};
+    for (std::string line; std::getline(ifs, line);) {
+        std::smatch match_results;
+        if (std::regex_match(line, match_results, unusable_index_regex)) {
+            std::stringstream free_pages(std::string{match_results[3]});
+            std::vector<int> free_pages_per_order(std::istream_iterator<int>{free_pages},
+                                                  std::istream_iterator<int>());
+
+            int total_free_pages = 0;
+            for (size_t i = 0; i < free_pages_per_order.size(); i++) {
+                total_free_pages += (free_pages_per_order[i] * std::pow(2, i));
+            }
+
+            printf("Node %s, zone %8s", match_results[1].str().c_str(),
+                   match_results[2].str().c_str());
+
+            int usable_free_pages = total_free_pages;
+            for (size_t i = 0; i < free_pages_per_order.size(); i++) {
+                auto unusable_index = (total_free_pages - usable_free_pages) /
+                        static_cast<double>(total_free_pages);
+                printf(" %5.3f", unusable_index);
+                usable_free_pages -= (free_pages_per_order[i] * std::pow(2, i));
+            }
+
+            printf("\n");
+        }
+    }
+    printf("\n");
+}
+
 // Dumps various things. Returns early with status USER_CONSENT_DENIED if user denies consent
 // via the consent they are shown. Ignores other errors that occur while running various
 // commands. The consent checking is currently done around long running tasks, which happen to
@@ -1214,7 +1309,6 @@ static Dumpstate::RunStatus dumpstate() {
     dump_dev_files("TRUSTY VERSION", "/sys/bus/platform/drivers/trusty", "trusty_version");
     RunCommand("UPTIME", {"uptime"});
     DumpBlockStatFiles();
-    dump_emmc_ecsd("/d/mmc0/mmc0:0001/ext_csd");
     DumpFile("MEMORY INFO", "/proc/meminfo");
     RunCommand("CPU INFO", {"top", "-b", "-n", "1", "-H", "-s", "6", "-o",
                             "pid,tid,user,pr,ni,%cpu,s,virt,res,pcy,cmd,name"});
@@ -1227,7 +1321,7 @@ static Dumpstate::RunStatus dumpstate() {
     DumpFile("ZONEINFO", "/proc/zoneinfo");
     DumpFile("PAGETYPEINFO", "/proc/pagetypeinfo");
     DumpFile("BUDDYINFO", "/proc/buddyinfo");
-    DumpFile("FRAGMENTATION INFO", "/d/extfrag/unusable_index");
+    DumpExternalFragmentationInfo();
 
     DumpFile("KERNEL WAKE SOURCES", "/d/wakeup_sources");
     DumpFile("KERNEL CPUFREQ", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state");
@@ -1404,6 +1498,15 @@ static Dumpstate::RunStatus dumpstate() {
     printf("========================================================\n");
     printf("== dumpstate: done (id %d)\n", ds.id_);
     printf("========================================================\n");
+
+    printf("========================================================\n");
+    printf("== Obtaining statsd metadata\n");
+    printf("========================================================\n");
+    // This differs from the usual dumpsys stats, which is the stats report data.
+    RunDumpsys("STATSDSTATS", {"stats", "--metadata"});
+
+    RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK(DumpIncidentReport);
+
     return Dumpstate::RunStatus::OK;
 }
 
@@ -1437,6 +1540,7 @@ static Dumpstate::RunStatus DumpstateDefault() {
     }
     add_mountinfo();
     DumpIpTablesAsRoot();
+    DumpDynamicPartitionInfo();
 
     // Capture any IPSec policies in play. No keys are exposed here.
     RunCommand("IP XFRM POLICY", {"ip", "xfrm", "policy"}, CommandOptions::WithTimeout(10).Build());
@@ -1468,6 +1572,8 @@ static Dumpstate::RunStatus DumpstateDefault() {
 static void DumpstateRadioCommon() {
     DumpIpTablesAsRoot();
 
+    ds.AddDir(LOGPERSIST_DATA_DIR, false);
+
     if (!DropRootUser()) {
         return;
     }
@@ -1478,6 +1584,7 @@ static void DumpstateRadioCommon() {
     DoKmsg();
     DumpIpAddrAndRules();
     dump_route_tables();
+    DumpHals();
 
     RunDumpsys("NETWORK DIAGNOSTICS", {"connectivity", "--diag"},
                CommandOptions::WithTimeout(10).Build());
@@ -1546,8 +1653,6 @@ static void DumpstateWifiOnly() {
                SEC_TO_MSEC(10));
     RunDumpsys("DUMPSYS", {"wifi"}, CommandOptions::WithTimeout(90).Build(),
                SEC_TO_MSEC(10));
-
-    DumpHals();
 
     printf("========================================================\n");
     printf("== dumpstate: done (id %d)\n", ds.id_);
@@ -1903,7 +2008,7 @@ static void SendBroadcast(const std::string& action, const std::vector<std::stri
 
 static void Vibrate(int duration_ms) {
     // clang-format off
-    RunCommand("", {"cmd", "vibrator", "vibrate", std::to_string(duration_ms), "dumpstate"},
+    RunCommand("", {"cmd", "vibrator", "vibrate", "-f", std::to_string(duration_ms), "dumpstate"},
                CommandOptions::WithTimeout(10)
                    .Log("Vibrate: '%s'\n")
                    .Always()
@@ -2658,8 +2763,8 @@ void Dumpstate::CheckUserConsent(int32_t calling_uid, const android::String16& c
     if (ics != nullptr) {
         MYLOGD("Checking user consent via incidentcompanion service\n");
         android::interface_cast<android::os::IIncidentCompanion>(ics)->authorizeReport(
-            calling_uid, calling_package, 0x1 /* FLAG_CONFIRMATION_DIALOG */,
-            consent_callback_.get());
+            calling_uid, calling_package, String16(), String16(),
+            0x1 /* FLAG_CONFIRMATION_DIALOG */, consent_callback_.get());
     } else {
         MYLOGD("Unable to check user consent; incidentcompanion service unavailable\n");
     }
@@ -2773,8 +2878,8 @@ Dumpstate& Dumpstate::GetInstance() {
     return singleton_;
 }
 
-DurationReporter::DurationReporter(const std::string& title, bool logcat_only)
-    : title_(title), logcat_only_(logcat_only) {
+DurationReporter::DurationReporter(const std::string& title, bool logcat_only, bool verbose)
+    : title_(title), logcat_only_(logcat_only), verbose_(verbose) {
     if (!title_.empty()) {
         started_ = Nanotime();
     }
@@ -2783,7 +2888,7 @@ DurationReporter::DurationReporter(const std::string& title, bool logcat_only)
 DurationReporter::~DurationReporter() {
     if (!title_.empty()) {
         float elapsed = (float)(Nanotime() - started_) / NANOS_PER_SEC;
-        if (elapsed < .5f) {
+        if (elapsed < .5f && !verbose_) {
             return;
         }
         MYLOGD("Duration of '%s': %.2fs\n", title_.c_str(), elapsed);
@@ -3376,8 +3481,8 @@ int dump_file_from_fd(const char *title, const char *path, int fd) {
 }
 
 int Dumpstate::RunCommand(const std::string& title, const std::vector<std::string>& full_command,
-                          const CommandOptions& options) {
-    DurationReporter duration_reporter(title);
+                          const CommandOptions& options, bool verbose_duration) {
+    DurationReporter duration_reporter(title, false /* logcat_only */, verbose_duration);
 
     int status = RunCommandToFd(STDOUT_FILENO, title, full_command, options);
 
@@ -3416,7 +3521,7 @@ int open_socket(const char *service) {
 
     struct sockaddr addr;
     socklen_t alen = sizeof(addr);
-    int fd = accept(s, &addr, &alen);
+    int fd = accept4(s, &addr, &alen, SOCK_CLOEXEC);
 
     // Close socket just after accept(), to make sure that connect() by client will get error
     // when the socket is used by the other services.
@@ -3588,110 +3693,3 @@ time_t get_mtime(int fd, time_t default_mtime) {
     }
     return info.st_mtime;
 }
-
-void dump_emmc_ecsd(const char *ext_csd_path) {
-    // List of interesting offsets
-    struct hex {
-        char str[2];
-    };
-    static const size_t EXT_CSD_REV = 192 * sizeof(hex);
-    static const size_t EXT_PRE_EOL_INFO = 267 * sizeof(hex);
-    static const size_t EXT_DEVICE_LIFE_TIME_EST_TYP_A = 268 * sizeof(hex);
-    static const size_t EXT_DEVICE_LIFE_TIME_EST_TYP_B = 269 * sizeof(hex);
-
-    std::string buffer;
-    if (!android::base::ReadFileToString(ext_csd_path, &buffer)) {
-        return;
-    }
-
-    printf("------ %s Extended CSD ------\n", ext_csd_path);
-
-    if (buffer.length() < (EXT_CSD_REV + sizeof(hex))) {
-        printf("*** %s: truncated content %zu\n\n", ext_csd_path, buffer.length());
-        return;
-    }
-
-    int ext_csd_rev = 0;
-    std::string sub = buffer.substr(EXT_CSD_REV, sizeof(hex));
-    if (sscanf(sub.c_str(), "%2x", &ext_csd_rev) != 1) {
-        printf("*** %s: EXT_CSD_REV parse error \"%s\"\n\n", ext_csd_path, sub.c_str());
-        return;
-    }
-
-    static const char *ver_str[] = {
-        "4.0", "4.1", "4.2", "4.3", "Obsolete", "4.41", "4.5", "5.0"
-    };
-    printf("rev 1.%d (MMC %s)\n", ext_csd_rev,
-           (ext_csd_rev < (int)(sizeof(ver_str) / sizeof(ver_str[0]))) ? ver_str[ext_csd_rev]
-                                                                       : "Unknown");
-    if (ext_csd_rev < 7) {
-        printf("\n");
-        return;
-    }
-
-    if (buffer.length() < (EXT_PRE_EOL_INFO + sizeof(hex))) {
-        printf("*** %s: truncated content %zu\n\n", ext_csd_path, buffer.length());
-        return;
-    }
-
-    int ext_pre_eol_info = 0;
-    sub = buffer.substr(EXT_PRE_EOL_INFO, sizeof(hex));
-    if (sscanf(sub.c_str(), "%2x", &ext_pre_eol_info) != 1) {
-        printf("*** %s: PRE_EOL_INFO parse error \"%s\"\n\n", ext_csd_path, sub.c_str());
-        return;
-    }
-
-    static const char *eol_str[] = {
-        "Undefined",
-        "Normal",
-        "Warning (consumed 80% of reserve)",
-        "Urgent (consumed 90% of reserve)"
-    };
-    printf(
-        "PRE_EOL_INFO %d (MMC %s)\n", ext_pre_eol_info,
-        eol_str[(ext_pre_eol_info < (int)(sizeof(eol_str) / sizeof(eol_str[0]))) ? ext_pre_eol_info
-                                                                                 : 0]);
-
-    for (size_t lifetime = EXT_DEVICE_LIFE_TIME_EST_TYP_A;
-            lifetime <= EXT_DEVICE_LIFE_TIME_EST_TYP_B;
-            lifetime += sizeof(hex)) {
-        int ext_device_life_time_est;
-        static const char *est_str[] = {
-            "Undefined",
-            "0-10% of device lifetime used",
-            "10-20% of device lifetime used",
-            "20-30% of device lifetime used",
-            "30-40% of device lifetime used",
-            "40-50% of device lifetime used",
-            "50-60% of device lifetime used",
-            "60-70% of device lifetime used",
-            "70-80% of device lifetime used",
-            "80-90% of device lifetime used",
-            "90-100% of device lifetime used",
-            "Exceeded the maximum estimated device lifetime",
-        };
-
-        if (buffer.length() < (lifetime + sizeof(hex))) {
-            printf("*** %s: truncated content %zu\n", ext_csd_path, buffer.length());
-            break;
-        }
-
-        ext_device_life_time_est = 0;
-        sub = buffer.substr(lifetime, sizeof(hex));
-        if (sscanf(sub.c_str(), "%2x", &ext_device_life_time_est) != 1) {
-            printf("*** %s: DEVICE_LIFE_TIME_EST_TYP_%c parse error \"%s\"\n", ext_csd_path,
-                   (unsigned)((lifetime - EXT_DEVICE_LIFE_TIME_EST_TYP_A) / sizeof(hex)) + 'A',
-                   sub.c_str());
-            continue;
-        }
-        printf("DEVICE_LIFE_TIME_EST_TYP_%c %d (MMC %s)\n",
-               (unsigned)((lifetime - EXT_DEVICE_LIFE_TIME_EST_TYP_A) / sizeof(hex)) + 'A',
-               ext_device_life_time_est,
-               est_str[(ext_device_life_time_est < (int)(sizeof(est_str) / sizeof(est_str[0])))
-                           ? ext_device_life_time_est
-                           : 0]);
-    }
-
-    printf("\n");
-}
-

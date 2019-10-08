@@ -57,6 +57,9 @@ public:
     // break the device during GSI or other tests.
     static void markVndk(IBinder* binder);
 
+    // Returns true if the binder needs to be declared in the VINTF manifest or
+    // else false if the binder is local to the current partition.
+    static bool requiresVintfDeclaration(const sp<IBinder>& binder);
 private:
     // Parcel needs to read/write stability level in an unstable format.
     friend ::android::Parcel;
@@ -78,7 +81,7 @@ private:
         VINTF = 0b111111,
     };
 
-#ifdef __ANDROID_VNDK__
+#if defined(__ANDROID_VNDK__) && !defined(__ANDROID_APEX__)
     static constexpr Level kLocalStability = Level::VENDOR;
 #else
     static constexpr Level kLocalStability = Level::SYSTEM;
