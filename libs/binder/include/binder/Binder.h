@@ -64,6 +64,12 @@ public:
     // This must be called before the object is sent to another process. Not thread safe.
     void                setRequestingSid(bool requestSid);
 
+    sp<IBinder>         getExtension();
+    // This must be called before the object is sent to another process. Not thread safe.
+    void                setExtension(const sp<IBinder>& extension);
+
+    pid_t               getDebugPid();
+
 protected:
     virtual             ~BBinder();
 
@@ -108,7 +114,7 @@ private:
     std::atomic<int32_t>    mState;
 };
 
-}; // namespace android
+} // namespace android
 
 // ---------------------------------------------------------------------------
 

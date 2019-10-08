@@ -2,6 +2,7 @@ filegroup {
     name: "gpuservice_sources",
     srcs: [
         "GpuService.cpp",
+        "gpustats/GpuStats.cpp"
     ],
 }
 
@@ -29,12 +30,16 @@ cc_defaults {
         "frameworks/native/vulkan/include",
     ],
     shared_libs: [
+        "libbase",
         "libbinder",
+        "libcutils",
+        "libgraphicsenv",
         "liblog",
         "libutils",
         "libvulkan",
     ],
     static_libs: [
+        "libserviceutils",
         "libvkjson",
     ],
 }
@@ -54,11 +59,9 @@ cc_defaults {
 cc_defaults {
     name: "gpuservice_binary",
     defaults: ["gpuservice_defaults"],
-    whole_static_libs: [
-        "libsigchain",
-    ],
     shared_libs: [
         "libbinder",
+        "libcutils",
         "liblog",
         "libutils",
     ],

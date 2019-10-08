@@ -26,12 +26,22 @@ namespace android {
 
 // ----------------------------------------------------------------------
 
+/**
+ * Service manager for C++ services.
+ *
+ * IInterface is only for legacy ABI compatibility
+ */
 class IServiceManager : public IInterface
 {
 public:
-    DECLARE_META_INTERFACE(ServiceManager)
+    // for ABI compatibility
+    virtual const String16& getInterfaceDescriptor() const;
+
+    IServiceManager();
+    virtual ~IServiceManager();
+
     /**
-     * Must match values in IServiceManager.java
+     * Must match values in IServiceManager.aidl
      */
     /* Allows services to dump sections according to priorities. */
     static const int DUMP_FLAG_PRIORITY_CRITICAL = 1 << 0;
@@ -72,15 +82,21 @@ public:
     // NOLINTNEXTLINE(google-default-arguments)
     virtual Vector<String16> listServices(int dumpsysFlags = DUMP_FLAG_PRIORITY_ALL) = 0;
 
-    enum {
-        GET_SERVICE_TRANSACTION = IBinder::FIRST_CALL_TRANSACTION,
-        CHECK_SERVICE_TRANSACTION,
-        ADD_SERVICE_TRANSACTION,
-        LIST_SERVICES_TRANSACTION,
-    };
+    /**
+     * Efficiently wait for a service.
+     *
+     * Returns nullptr only for permission problem or fatal error.
+     */
+    virtual sp<IBinder> waitForService(const String16& name) = 0;
 };
 
 sp<IServiceManager> defaultServiceManager();
+
+template<typename INTERFACE>
+sp<INTERFACE> waitForService(const String16& name) {
+    const sp<IServiceManager> sm = defaultServiceManager();
+    return interface_cast<INTERFACE>(sm->waitForService(name));
+}
 
 template<typename INTERFACE>
 status_t getService(const String16& name, sp<INTERFACE>* outService)
@@ -88,7 +104,7 @@ status_t getService(const String16& name, sp<INTERFACE>* outService)
     const sp<IServiceManager> sm = defaultServiceManager();
     if (sm != nullptr) {
         *outService = interface_cast<INTERFACE>(sm->getService(name));
-        if ((*outService) != NULL) return NO_ERROR;
+        if ((*outService) != nullptr) return NO_ERROR;
     }
     return NAME_NOT_FOUND;
 }
@@ -98,7 +114,7 @@ bool checkCallingPermission(const String16& permission,
                             int32_t* outPid, int32_t* outUid);
 bool checkPermission(const String16& permission, pid_t pid, uid_t uid);
 
-}; // namespace android
+} // namespace android
 
 #endif // ANDROID_ISERVICE_MANAGER_H
 

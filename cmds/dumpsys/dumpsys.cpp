@@ -65,7 +65,7 @@ static void usage() {
             "         -l: only list services, do not dump them\n"
             "         -t TIMEOUT_SEC: TIMEOUT to use in seconds instead of default 10 seconds\n"
             "         -T TIMEOUT_MS: TIMEOUT to use in milliseconds instead of default 10 seconds\n"
-            "         --proto: filter services that support dumping data in proto format. Dumps"
+            "         --proto: filter services that support dumping data in proto format. Dumps\n"
             "               will be in proto format.\n"
             "         --priority LEVEL: filter services based on specified priority\n"
             "               LEVEL must be one of CRITICAL | HIGH | NORMAL\n"
@@ -201,7 +201,13 @@ int Dumpsys::main(int argc, char* const argv[]) {
             if (i == optind) {
                 services.add(String16(argv[i]));
             } else {
-                args.add(String16(argv[i]));
+                const String16 arg(argv[i]);
+                args.add(arg);
+                // For backward compatible, if the proto argument is passed to the service, the
+                // dump request is also considered to use proto.
+                if (!asProto && !arg.compare(String16(PriorityDumper::PROTO_ARG))) {
+                    asProto = true;
+                }
             }
         }
     }
