@@ -19,6 +19,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <libgen.h>
 #include <limits.h>
 #include <math.h>
@@ -61,9 +62,11 @@
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
+#include <android/content/pm/IPackageManagerNative.h>
 #include <android/hardware/dumpstate/1.0/IDumpstateDevice.h>
 #include <android/hidl/manager/1.0/IServiceManager.h>
 #include <android/os/IIncidentCompanion.h>
+#include <binder/IServiceManager.h>
 #include <cutils/native_handle.h>
 #include <cutils/properties.h>
 #include <cutils/sockets.h>
@@ -237,6 +240,30 @@ static bool IsFileEmpty(const std::string& file_path) {
     return file.tellg() <= 0;
 }
 
+int64_t GetModuleMetadataVersion() {
+    auto binder = defaultServiceManager()->getService(android::String16("package_native"));
+    if (binder == nullptr) {
+        MYLOGE("Failed to retrieve package_native service");
+        return 0L;
+    }
+    auto package_service = android::interface_cast<content::pm::IPackageManagerNative>(binder);
+    std::string package_name;
+    auto status = package_service->getModuleMetadataPackageName(&package_name);
+    if (!status.isOk()) {
+        MYLOGE("Failed to retrieve module metadata package name: %s", status.toString8().c_str());
+        return 0L;
+    }
+    MYLOGD("Module metadata package name: %s\n", package_name.c_str());
+    int64_t version_code;
+    status = package_service->getVersionCodeForPackage(android::String16(package_name.c_str()),
+                                                       &version_code);
+    if (!status.isOk()) {
+        MYLOGE("Failed to retrieve module metadata version: %s", status.toString8().c_str());
+        return 0L;
+    }
+    return version_code;
+}
+
 }  // namespace
 }  // namespace os
 }  // namespace android
@@ -273,12 +300,10 @@ static const CommandOptions AS_ROOT_20 = CommandOptions::WithTimeout(20).AsRoot(
  * Returns a vector of dump fds under |dir_path| with a given |file_prefix|.
  * The returned vector is sorted by the mtimes of the dumps. If |limit_by_mtime|
  * is set, the vector only contains files that were written in the last 30 minutes.
- * If |limit_by_count| is set, the vector only contains the ten latest files.
  */
 static std::vector<DumpData> GetDumpFds(const std::string& dir_path,
                                         const std::string& file_prefix,
-                                        bool limit_by_mtime,
-                                        bool limit_by_count = true) {
+                                        bool limit_by_mtime) {
     const time_t thirty_minutes_ago = ds.now_ - 60 * 30;
 
     std::unique_ptr<DIR, decltype(&closedir)> dump_dir(opendir(dir_path.c_str()), closedir);
@@ -320,15 +345,6 @@ static std::vector<DumpData> GetDumpFds(const std::string& dir_path,
         }
 
         dump_data.emplace_back(DumpData{abs_path, std::move(fd), st.st_mtime});
-    }
-
-    // Sort in descending modification time so that we only keep the newest
-    // reports if |limit_by_count| is true.
-    std::sort(dump_data.begin(), dump_data.end(),
-              [](const DumpData& d1, const DumpData& d2) { return d1.mtime > d2.mtime; });
-
-    if (limit_by_count && dump_data.size() > 10) {
-        dump_data.erase(dump_data.begin() + 10, dump_data.end());
     }
 
     return dump_data;
@@ -668,6 +684,10 @@ void Dumpstate::PrintHeader() const {
     printf("Bootloader: %s\n", bootloader.c_str());
     printf("Radio: %s\n", radio.c_str());
     printf("Network: %s\n", network.c_str());
+    int64_t module_metadata_version = android::os::GetModuleMetadataVersion();
+    if (module_metadata_version != 0) {
+        printf("Module Metadata version: %" PRId64 "\n", module_metadata_version);
+    }
 
     printf("Kernel: ");
     DumpFileToFd(STDOUT_FILENO, "", "/proc/version");
@@ -856,6 +876,17 @@ static void DoKernelLogcat() {
         CommandOptions::WithTimeoutInMs(timeout_ms).Build());
 }
 
+static void DoSystemLogcat(time_t since) {
+    char since_str[80];
+    strftime(since_str, sizeof(since_str), "%Y-%m-%d %H:%M:%S.000", localtime(&since));
+
+    unsigned long timeout_ms = logcat_timeout({"main", "system", "crash"});
+    RunCommand("SYSTEM LOG",
+               {"logcat", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v", "-T",
+                since_str},
+               CommandOptions::WithTimeoutInMs(timeout_ms).Build());
+}
+
 static void DoLogcat() {
     unsigned long timeout_ms;
     // DumpFile("EVENT LOG TAGS", "/etc/event-log-tags");
@@ -887,6 +918,31 @@ static void DoLogcat() {
                                "-v", "uid", "-d", "*:v"});
 }
 
+static void DumpIncidentReport() {
+    if (!ds.IsZipping()) {
+        MYLOGD("Not dumping incident report because it's not a zipped bugreport\n");
+        return;
+    }
+    DurationReporter duration_reporter("INCIDENT REPORT");
+    const std::string path = ds.bugreport_internal_dir_ + "/tmp_incident_report";
+    auto fd = android::base::unique_fd(TEMP_FAILURE_RETRY(open(path.c_str(),
+                O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+                S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)));
+    if (fd < 0) {
+        MYLOGE("Could not open %s to dump incident report.\n", path.c_str());
+        return;
+    }
+    RunCommandToFd(fd, "", {"incident", "-u"}, CommandOptions::WithTimeout(120).Build());
+    bool empty = 0 == lseek(fd, 0, SEEK_END);
+    if (!empty) {
+        // Use a different name from "incident.proto"
+        // /proto/incident.proto is reserved for incident service dump
+        // i.e. metadata for debugging.
+        ds.AddZipEntry(kProtoPath + "incident_report" + kProtoExt, path);
+    }
+    unlink(path.c_str());
+}
+
 static void DumpIpTablesAsRoot() {
     RunCommand("IPTABLES", {"iptables", "-L", "-nvx"});
     RunCommand("IP6TABLES", {"ip6tables", "-L", "-nvx"});
@@ -896,6 +952,14 @@ static void DumpIpTablesAsRoot() {
     RunCommand("IP6TABLES MANGLE", {"ip6tables", "-t", "mangle", "-L", "-nvx"});
     RunCommand("IPTABLES RAW", {"iptables", "-t", "raw", "-L", "-nvx"});
     RunCommand("IP6TABLES RAW", {"ip6tables", "-t", "raw", "-L", "-nvx"});
+}
+
+static void DumpDynamicPartitionInfo() {
+    if (!::android::base::GetBoolProperty("ro.boot.dynamic_partitions", false)) {
+        return;
+    }
+
+    RunCommand("LPDUMP", {"lpdump", "--all"});
 }
 
 static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_dir) {
@@ -1312,8 +1376,6 @@ static Dumpstate::RunStatus dumpstate() {
         ds.TakeScreenshot();
     }
 
-    DoLogcat();
-
     AddAnrTraceFiles();
 
     // NOTE: tombstones are always added as separate entries in the zip archive
@@ -1445,6 +1507,15 @@ static Dumpstate::RunStatus dumpstate() {
     printf("========================================================\n");
     printf("== dumpstate: done (id %d)\n", ds.id_);
     printf("========================================================\n");
+
+    printf("========================================================\n");
+    printf("== Obtaining statsd metadata\n");
+    printf("========================================================\n");
+    // This differs from the usual dumpsys stats, which is the stats report data.
+    RunDumpsys("STATSDSTATS", {"stats", "--metadata"});
+
+    RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK(DumpIncidentReport);
+
     return Dumpstate::RunStatus::OK;
 }
 
@@ -1460,6 +1531,12 @@ static Dumpstate::RunStatus DumpstateDefault() {
     // Invoking the following dumpsys calls before DumpTraces() to try and
     // keep the system stats as close to its initial state as possible.
     RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK(RunDumpsysCritical);
+
+    // Capture first logcat early on; useful to take a snapshot before dumpstate logs take over the
+    // buffer.
+    DoLogcat();
+    // Capture timestamp after first logcat to use in next logcat
+    time_t logcat_ts = time(nullptr);
 
     /* collect stack traces from Dalvik and native processes (needs root) */
     RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK(ds.DumpTraces, &dump_traces_path);
@@ -1478,6 +1555,7 @@ static Dumpstate::RunStatus DumpstateDefault() {
     }
     add_mountinfo();
     DumpIpTablesAsRoot();
+    DumpDynamicPartitionInfo();
 
     // Capture any IPSec policies in play. No keys are exposed here.
     RunCommand("IP XFRM POLICY", {"ip", "xfrm", "policy"}, CommandOptions::WithTimeout(10).Build());
@@ -1497,12 +1575,19 @@ static Dumpstate::RunStatus DumpstateDefault() {
         RunCommand("Dmabuf dump", {"/product/bin/dmabuf_dump"});
     }
 
+    DumpFile("PSI cpu", "/proc/pressure/cpu");
+    DumpFile("PSI memory", "/proc/pressure/memory");
+    DumpFile("PSI io", "/proc/pressure/io");
+
     if (!DropRootUser()) {
         return Dumpstate::RunStatus::ERROR;
     }
 
     RETURN_IF_USER_DENIED_CONSENT();
-    return dumpstate();
+    Dumpstate::RunStatus status = dumpstate();
+    // Capture logcat since the last time we did it.
+    DoSystemLogcat(logcat_ts);
+    return status;
 }
 
 // This method collects common dumpsys for telephony and wifi
@@ -1945,7 +2030,7 @@ static void SendBroadcast(const std::string& action, const std::vector<std::stri
 
 static void Vibrate(int duration_ms) {
     // clang-format off
-    RunCommand("", {"cmd", "vibrator", "vibrate", std::to_string(duration_ms), "dumpstate"},
+    RunCommand("", {"cmd", "vibrator", "vibrate", "-f", std::to_string(duration_ms), "dumpstate"},
                CommandOptions::WithTimeout(10)
                    .Log("Vibrate: '%s'\n")
                    .Always()
@@ -2700,8 +2785,8 @@ void Dumpstate::CheckUserConsent(int32_t calling_uid, const android::String16& c
     if (ics != nullptr) {
         MYLOGD("Checking user consent via incidentcompanion service\n");
         android::interface_cast<android::os::IIncidentCompanion>(ics)->authorizeReport(
-            calling_uid, calling_package, 0x1 /* FLAG_CONFIRMATION_DIALOG */,
-            consent_callback_.get());
+            calling_uid, calling_package, String16(), String16(),
+            0x1 /* FLAG_CONFIRMATION_DIALOG */, consent_callback_.get());
     } else {
         MYLOGD("Unable to check user consent; incidentcompanion service unavailable\n");
     }
@@ -3458,7 +3543,7 @@ int open_socket(const char *service) {
 
     struct sockaddr addr;
     socklen_t alen = sizeof(addr);
-    int fd = accept(s, &addr, &alen);
+    int fd = accept4(s, &addr, &alen, SOCK_CLOEXEC);
 
     // Close socket just after accept(), to make sure that connect() by client will get error
     // when the socket is used by the other services.

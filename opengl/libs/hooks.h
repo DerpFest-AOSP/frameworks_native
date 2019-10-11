@@ -46,7 +46,7 @@
 #define MAX_NUMBER_OF_GL_EXTENSIONS 256
 
 
-#include <bionic_tls.h>  /* special private C library header */
+#include <bionic/tls.h>  /* special private C library header */
 
 // ----------------------------------------------------------------------------
 namespace android {
@@ -58,6 +58,10 @@ namespace android {
 #undef EGL_ENTRY
 #define GL_ENTRY(_r, _api, ...) _r (*(_api))(__VA_ARGS__);
 #define EGL_ENTRY(_r, _api, ...) _r (*(_api))(__VA_ARGS__);
+
+struct platform_impl_t {
+    #include "platform_entries.in"
+};
 
 struct egl_t {
     #include "EGL/egl_entries.in"

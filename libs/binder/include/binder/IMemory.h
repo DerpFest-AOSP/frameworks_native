@@ -43,7 +43,7 @@ public:
     virtual void*       getBase() const = 0;
     virtual size_t      getSize() const = 0;
     virtual uint32_t    getFlags() const = 0;
-    virtual uint32_t    getOffset() const = 0;
+    virtual off_t       getOffset() const = 0;
 
     // these are there just for backward source compatibility
     int32_t heapID() const { return getHeapID(); }
@@ -76,6 +76,8 @@ public:
     // NOLINTNEXTLINE(google-default-arguments)
     virtual sp<IMemoryHeap> getMemory(ssize_t* offset=nullptr, size_t* size=nullptr) const = 0;
 
+    void* unsecurePointer() const;
+
     // helpers
     void* fastPointer(const sp<IBinder>& heap, ssize_t offset) const;
     void* pointer() const;
@@ -100,6 +102,6 @@ protected:
 
 // ----------------------------------------------------------------------------
 
-}; // namespace android
+} // namespace android
 
 #endif // ANDROID_IMEMORY_H
