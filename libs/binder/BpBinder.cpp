@@ -215,16 +215,18 @@ status_t BpBinder::transact(
     // Once a binder has died, it will never come back to life.
     if (mAlive) {
         // user transactions require a given stability level
-        // Cannot add requirement w/o SM update
-        // if (code >= FIRST_CALL_TRANSACTION && code <= LAST_CALL_TRANSACTION) {
-        //     using android::internal::Stability;
+        if (code >= FIRST_CALL_TRANSACTION && code <= LAST_CALL_TRANSACTION) {
+            using android::internal::Stability;
 
-        //     auto stability = Stability::get(this);
+            auto stability = Stability::get(this);
 
-        //     if (CC_UNLIKELY(!Stability::check(stability, Stability::kLocalStability))) {
-        //         return BAD_TYPE;
-        //     }
-        // }
+            if (CC_UNLIKELY(!Stability::check(stability, Stability::kLocalStability))) {
+                ALOGE("Cannot do a user transaction on a %s binder in a %s context.",
+                    Stability::stabilityString(stability).c_str(),
+                    Stability::stabilityString(Stability::kLocalStability).c_str());
+                return BAD_TYPE;
+            }
+        }
 
         status_t status = IPCThreadState::self()->transact(
             mHandle, code, data, reply, flags);
@@ -489,4 +491,4 @@ void BpBinder::setBinderProxyCountWatermarks(int high, int low) {
 
 // ---------------------------------------------------------------------------
 
-}; // namespace android
+} // namespace android

@@ -22,9 +22,8 @@
 #include <utils/String16.h>
 #include <utils/Vector.h>
 
-
-// linux/binder.h already defines this, but we can't just include it from there
-// because there are host builds that include this file.
+// linux/binder.h defines this, but we don't want to include it here in order to
+// avoid exporting the kernel headers
 #ifndef B_PACK_CHARS
 #define B_PACK_CHARS(c1, c2, c3, c4) \
     ((((c1)<<24)) | (((c2)<<16)) | (((c3)<<8)) | (c4))
@@ -60,6 +59,7 @@ public:
         INTERFACE_TRANSACTION   = B_PACK_CHARS('_', 'N', 'T', 'F'),
         SYSPROPS_TRANSACTION    = B_PACK_CHARS('_', 'S', 'P', 'R'),
         EXTENSION_TRANSACTION   = B_PACK_CHARS('_', 'E', 'X', 'T'),
+        DEBUG_PID_TRANSACTION   = B_PACK_CHARS('_', 'P', 'I', 'D'),
 
         // Corresponds to TF_ONE_WAY -- an asynchronous call.
         FLAG_ONEWAY             = 0x00000001
@@ -129,6 +129,11 @@ public:
      *         // type of extension
      */
     status_t                getExtension(sp<IBinder>* out);
+
+    /**
+     * Dump PID for a binder, for debugging.
+     */
+    status_t                getDebugPid(pid_t* outPid);
 
     // NOLINTNEXTLINE(google-default-arguments)
     virtual status_t        transact(   uint32_t code,
@@ -237,7 +242,7 @@ protected:
 private:
 };
 
-}; // namespace android
+} // namespace android
 
 // ---------------------------------------------------------------------------
 

@@ -55,6 +55,16 @@ public:
         data.writeInt32(disabled ? 1 : 0);
         remote()->transact(ON_UID_IDLE_TRANSACTION, data, &reply, IBinder::FLAG_ONEWAY);
     }
+
+    virtual void onUidStateChanged(uid_t uid, int32_t procState, int64_t procStateSeq)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IUidObserver::getInterfaceDescriptor());
+        data.writeInt32((int32_t) uid);
+        data.writeInt32(procState);
+        data.writeInt64(procStateSeq);
+        remote()->transact(ON_UID_STATE_CHANGED_TRANSACTION, data, &reply, IBinder::FLAG_ONEWAY);
+    }
 };
 
 // ----------------------------------------------------------------------
@@ -89,9 +99,17 @@ status_t BnUidObserver::onTransact(
             onUidIdle(uid, disabled);
             return NO_ERROR;
         } break;
+        case ON_UID_STATE_CHANGED_TRANSACTION: {
+            CHECK_INTERFACE(IUidObserver, data, reply);
+            uid_t uid = data.readInt32();
+            int32_t procState = data.readInt32();
+            int64_t procStateSeq = data.readInt64();
+            onUidStateChanged(uid, procState, procStateSeq);
+            return NO_ERROR;
+        } break;
         default:
             return BBinder::onTransact(code, data, reply, flags);
     }
 }
 
-}; // namespace android
+} // namespace android

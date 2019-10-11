@@ -114,6 +114,8 @@ static const char *kCommandStrings[] = {
     "BC_DEAD_BINDER_DONE"
 };
 
+static const int64_t kWorkSourcePropagatedBitIndex = 32;
+
 static const char* getReturnString(uint32_t cmd)
 {
     size_t idx = cmd & _IOC_NRMASK;
@@ -395,6 +397,48 @@ int32_t IPCThreadState::getStrictModePolicy() const
     return mStrictModePolicy;
 }
 
+int64_t IPCThreadState::setCallingWorkSourceUid(uid_t uid)
+{
+    int64_t token = setCallingWorkSourceUidWithoutPropagation(uid);
+    mPropagateWorkSource = true;
+    return token;
+}
+
+int64_t IPCThreadState::setCallingWorkSourceUidWithoutPropagation(uid_t uid)
+{
+    const int64_t propagatedBit = ((int64_t)mPropagateWorkSource) << kWorkSourcePropagatedBitIndex;
+    int64_t token = propagatedBit | mWorkSource;
+    mWorkSource = uid;
+    return token;
+}
+
+void IPCThreadState::clearPropagateWorkSource()
+{
+    mPropagateWorkSource = false;
+}
+
+bool IPCThreadState::shouldPropagateWorkSource() const
+{
+    return mPropagateWorkSource;
+}
+
+uid_t IPCThreadState::getCallingWorkSourceUid() const
+{
+    return mWorkSource;
+}
+
+int64_t IPCThreadState::clearCallingWorkSource()
+{
+    return setCallingWorkSourceUid(kUnsetWorkSource);
+}
+
+void IPCThreadState::restoreCallingWorkSource(int64_t token)
+{
+    uid_t uid = (int)token;
+    setCallingWorkSourceUidWithoutPropagation(uid);
+    mPropagateWorkSource = ((token >> kWorkSourcePropagatedBitIndex) & 1) == 1;
+}
+
 void IPCThreadState::setLastTransactionBinderFlags(int32_t flags)
 {
     mLastTransactionBinderFlags = flags;
@@ -553,9 +597,8 @@ void IPCThreadState::joinThreadPool(bool isMain)
         result = getAndExecuteCommand();
 
         if (result < NO_ERROR && result != TIMED_OUT && result != -ECONNREFUSED && result != -EBADF) {
-            ALOGE("getAndExecuteCommand(fd=%d) returned unexpected error %d, aborting",
+            LOG_ALWAYS_FATAL("getAndExecuteCommand(fd=%d) returned unexpected error %d, aborting",
                   mProcess->mDriverFD, result);
-            abort();
         }
 
         // Let this thread exit the thread pool if it is no longer
@@ -760,6 +803,8 @@ status_t IPCThreadState::clearDeathNotification(int32_t handle, BpBinder* proxy)
 
 IPCThreadState::IPCThreadState()
     : mProcess(ProcessState::self()),
+      mWorkSource(kUnsetWorkSource),
+      mPropagateWorkSource(false),
       mStrictModePolicy(0),
       mLastTransactionBinderFlags(0),
       mCallRestriction(mProcess->mCallRestriction)
@@ -1017,7 +1062,7 @@ status_t IPCThreadState::writeTransactionData(int32_t cmd, uint32_t binderFlags,
 
 sp<BBinder> the_context_object;
 
-void setTheContextObject(sp<BBinder> obj)
+void IPCThreadState::setTheContextObject(sp<BBinder> obj)
 {
     the_context_object = obj;
 }
@@ -1133,6 +1178,13 @@ status_t IPCThreadState::executeCommand(int32_t cmd)
             const uid_t origUid = mCallingUid;
             const int32_t origStrictModePolicy = mStrictModePolicy;
             const int32_t origTransactionBinderFlags = mLastTransactionBinderFlags;
+            const int32_t origWorkSource = mWorkSource;
+            const bool origPropagateWorkSet = mPropagateWorkSource;
+            // Calling work source will be set by Parcel#enforceInterface. Parcel#enforceInterface
+            // is only guaranteed to be called for AIDL-generated stubs so we reset the work source
+            // here to never propagate it.
+            clearCallingWorkSource();
+            clearPropagateWorkSource();
 
             mCallingPid = tr.sender_pid;
             mCallingSid = reinterpret_cast<const char*>(tr_secctx.secctx);
@@ -1188,6 +1240,8 @@ status_t IPCThreadState::executeCommand(int32_t cmd)
             mCallingUid = origUid;
             mStrictModePolicy = origStrictModePolicy;
             mLastTransactionBinderFlags = origTransactionBinderFlags;
+            mWorkSource = origWorkSource;
+            mPropagateWorkSource = origPropagateWorkSet;
 
             IF_LOG_TRANSACTIONS() {
                 TextOutput::Bundle _b(alog);
@@ -1271,4 +1325,4 @@ void IPCThreadState::freeBuffer(Parcel* parcel, const uint8_t* data,
     state->mOut.writePointer((uintptr_t)data);
 }
 
-}; // namespace android
+} // namespace android

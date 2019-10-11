@@ -40,8 +40,8 @@ constexpr int64_t kMbInBytes = 1024 * kKbInBytes;
 constexpr int64_t kGbInBytes = 1024 * kMbInBytes;
 constexpr int64_t kTbInBytes = 1024 * kGbInBytes;
 
-static constexpr int FLAG_FREE_CACHE_V2 = 1 << 13;
-static constexpr int FLAG_FREE_CACHE_V2_DEFY_QUOTA = 1 << 14;
+#define FLAG_FREE_CACHE_V2 InstalldNativeService::FLAG_FREE_CACHE_V2
+#define FLAG_FREE_CACHE_V2_DEFY_QUOTA InstalldNativeService::FLAG_FREE_CACHE_V2_DEFY_QUOTA
 
 int get_property(const char *key, char *value, const char *default_value) {
     return property_get(key, value, default_value);
@@ -67,29 +67,29 @@ bool create_cache_path(char path[PKG_PATH_MAX] ATTRIBUTE_UNUSED,
 }
 
 static void mkdir(const char* path) {
-    const char* fullPath = StringPrintf("/data/local/tmp/user/0/%s", path).c_str();
-    ::mkdir(fullPath, 0755);
+    const std::string fullPath = StringPrintf("/data/local/tmp/user/0/%s", path);
+    ::mkdir(fullPath.c_str(), 0755);
 }
 
 static void touch(const char* path, int len, int time) {
-    const char* fullPath = StringPrintf("/data/local/tmp/user/0/%s", path).c_str();
-    int fd = ::open(fullPath, O_RDWR | O_CREAT, 0644);
+    const std::string fullPath = StringPrintf("/data/local/tmp/user/0/%s", path);
+    int fd = ::open(fullPath.c_str(), O_RDWR | O_CREAT, 0644);
     ::fallocate(fd, 0, 0, len);
     ::close(fd);
     struct utimbuf times;
     times.actime = times.modtime = std::time(0) + time;
-    ::utime(fullPath, &times);
+    ::utime(fullPath.c_str(), &times);
 }
 
 static int exists(const char* path) {
-    const char* fullPath = StringPrintf("/data/local/tmp/user/0/%s", path).c_str();
-    return ::access(fullPath, F_OK);
+    const std::string fullPath = StringPrintf("/data/local/tmp/user/0/%s", path);
+    return ::access(fullPath.c_str(), F_OK);
 }
 
 static int64_t size(const char* path) {
-    const char* fullPath = StringPrintf("/data/local/tmp/user/0/%s", path).c_str();
+    const std::string fullPath = StringPrintf("/data/local/tmp/user/0/%s", path);
     struct stat buf;
-    if (!stat(fullPath, &buf)) {
+    if (!stat(fullPath.c_str(), &buf)) {
         return buf.st_size;
     } else {
         return -1;
@@ -107,8 +107,8 @@ static int64_t free() {
 }
 
 static void setxattr(const char* path, const char* key) {
-    const char* fullPath = StringPrintf("/data/local/tmp/user/0/%s", path).c_str();
-    ::setxattr(fullPath, key, "", 0, 0);
+    const std::string fullPath = StringPrintf("/data/local/tmp/user/0/%s", path);
+    ::setxattr(fullPath.c_str(), key, "", 0, 0);
 }
 
 class CacheTest : public testing::Test {
