@@ -20,7 +20,21 @@
 
 __BEGIN_DECLS
 
-#if defined(__ANDROID_VNDK__) && !defined(__ANDROID_APEX__)
+/**
+ * Private addition to binder_flag_t.
+ */
+enum {
+    /**
+     * Indicates that this transaction is coupled w/ vendor.img
+     */
+    FLAG_PRIVATE_VENDOR = 0x10000000,
+};
+
+#if (defined(__ANDROID_VNDK__) && !defined(__ANDROID_APEX__))
+
+enum {
+    FLAG_PRIVATE_LOCAL = FLAG_PRIVATE_VENDOR,
+};
 
 /**
  * This interface has the stability of the vendor image.
@@ -32,6 +46,10 @@ static inline void AIBinder_markCompilationUnitStability(AIBinder* binder) {
 }
 
 #else  // defined(__ANDROID_VNDK__) && !defined(__ANDROID_APEX__)
+
+enum {
+    FLAG_PRIVATE_LOCAL = 0,
+};
 
 /**
  * This interface has the stability of the system image.
