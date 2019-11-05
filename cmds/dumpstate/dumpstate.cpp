@@ -154,6 +154,7 @@ void add_mountinfo();
 #define XFRM_STAT_PROC_FILE "/proc/net/xfrm_stat"
 #define WLUTIL "/vendor/xbin/wlutil"
 #define WMTRACE_DATA_DIR "/data/misc/wmtrace"
+#define OTA_METADATA_DIR "/metadata/ota"
 
 // TODO(narayan): Since this information has to be kept in sync
 // with tombstoned, we should just put it in a common header.
@@ -960,6 +961,7 @@ static void DumpDynamicPartitionInfo() {
     }
 
     RunCommand("LPDUMP", {"lpdump", "--all"});
+    RunCommand("DEVICE-MAPPER", {"gsid", "dump-device-mapper"});
 }
 
 static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_dir) {
@@ -1556,6 +1558,7 @@ static Dumpstate::RunStatus DumpstateDefault() {
     add_mountinfo();
     DumpIpTablesAsRoot();
     DumpDynamicPartitionInfo();
+    ds.AddDir(OTA_METADATA_DIR, true);
 
     // Capture any IPSec policies in play. No keys are exposed here.
     RunCommand("IP XFRM POLICY", {"ip", "xfrm", "policy"}, CommandOptions::WithTimeout(10).Build());
