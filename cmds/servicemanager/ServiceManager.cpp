@@ -34,11 +34,7 @@ using ::android::internal::Stability;
 namespace android {
 
 #ifndef VENDORSERVICEMANAGER
-static bool meetsDeclarationRequirements(const sp<IBinder>& binder, const std::string& name) {
-    if (!Stability::requiresVintfDeclaration(binder)) {
-        return true;
-    }
-
+static bool isVintfDeclared(const std::string& name) {
     size_t firstSlash = name.find('/');
     size_t lastDot = name.rfind('.', firstSlash);
     if (firstSlash == std::string::npos || lastDot == std::string::npos) {
@@ -54,13 +50,21 @@ static bool meetsDeclarationRequirements(const sp<IBinder>& binder, const std::s
             vintf::VintfObject::GetDeviceHalManifest(),
             vintf::VintfObject::GetFrameworkHalManifest()
         }) {
-        if (manifest->hasAidlInstance(package, iface, instance)) {
+        if (manifest != nullptr && manifest->hasAidlInstance(package, iface, instance)) {
             return true;
         }
     }
     LOG(ERROR) << "Could not find " << package << "." << iface << "/" << instance
                << " in the VINTF manifest.";
     return false;
+}
+
+static bool meetsDeclarationRequirements(const sp<IBinder>& binder, const std::string& name) {
+    if (!Stability::requiresVintfDeclaration(binder)) {
+        return true;
+    }
+
+    return isVintfDeclared(name);
 }
 #endif  // !VENDORSERVICEMANAGER
 
@@ -165,7 +169,7 @@ Status ServiceManager::addService(const std::string& name, const sp<IBinder>& bi
 #endif  // !VENDORSERVICEMANAGER
 
     // implicitly unlinked when the binder is removed
-    if (OK != binder->linkToDeath(this)) {
+    if (binder->remoteBinder() != nullptr && binder->linkToDeath(this) != OK) {
         LOG(ERROR) << "Could not linkToDeath when adding " << name;
         return Status::fromExceptionCode(Status::EX_ILLEGAL_STATE);
     }
@@ -267,6 +271,21 @@ Status ServiceManager::unregisterForNotifications(
         return Status::fromExceptionCode(Status::EX_ILLEGAL_STATE);
     }
 
+    return Status::ok();
+}
+
+Status ServiceManager::isDeclared(const std::string& name, bool* outReturn) {
+    auto ctx = mAccess->getCallingContext();
+
+    if (!mAccess->canFind(ctx, name)) {
+        return Status::fromExceptionCode(Status::EX_SECURITY);
+    }
+
+    *outReturn = false;
+
+#ifndef VENDORSERVICEMANAGER
+    *outReturn = isVintfDeclared(name);
+#endif
     return Status::ok();
 }
 
