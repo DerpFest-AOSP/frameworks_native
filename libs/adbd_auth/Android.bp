@@ -1,4 +1,4 @@
-// Copyright (C) 2017 The Android Open Source Project
+// Copyright (C) 2019 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,27 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-ndk_headers {
-    name: "libarect_headers_for_ndk",
-    from: "include/android",
-    to: "android",
-    srcs: ["include/android/*.h"],
-    license: "NOTICE",
-}
-
-cc_library_headers {
-    name: "libarect_headers",
+cc_library {
+    name: "libadbd_auth",
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Wthread-safety",
+        "-Werror",
+    ],
+    srcs: ["adbd_auth.cpp"],
     export_include_dirs: ["include"],
-}
 
-cc_library_static {
-    name: "libarect",
-    host_supported: true,
-    vendor_available: true,
-    export_include_dirs: ["include"],
-    target: {
-        windows: {
-            enabled: true,
-        },
+    version_script: "libadbd_auth.map.txt",
+    stubs: {
+        symbol_file: "libadbd_auth.map.txt",
     },
+
+    host_supported: true,
+    recovery_available: true,
+    target: {
+        darwin: {
+            enabled: false,
+        }
+    },
+
+    shared_libs: [
+        "libbase",
+        "libcutils",
+        "liblog",
+    ],
 }
