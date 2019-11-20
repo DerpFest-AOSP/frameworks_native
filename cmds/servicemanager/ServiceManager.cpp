@@ -68,7 +68,15 @@ static bool meetsDeclarationRequirements(const sp<IBinder>& binder, const std::s
 }
 #endif  // !VENDORSERVICEMANAGER
 
-ServiceManager::ServiceManager(std::unique_ptr<Access>&& access) : mAccess(std::move(access)) {}
+ServiceManager::ServiceManager(std::unique_ptr<Access>&& access) : mAccess(std::move(access)) {
+#ifndef VENDORSERVICEMANAGER
+    // can process these at any times, don't want to delay first VINTF client
+    std::thread([] {
+        vintf::VintfObject::GetDeviceHalManifest();
+        vintf::VintfObject::GetFrameworkHalManifest();
+    }).detach();
+#endif  // !VENDORSERVICEMANAGER
+}
 ServiceManager::~ServiceManager() {
     // this should only happen in tests
 
@@ -306,7 +314,7 @@ void ServiceManager::removeCallback(const wp<IBinder>& who,
     if (listeners.empty()) {
         *it = mNameToCallback.erase(*it);
     } else {
-        it++;
+        (*it)++;
     }
 }
 
