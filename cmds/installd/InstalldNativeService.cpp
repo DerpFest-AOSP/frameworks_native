@@ -101,6 +101,7 @@ static constexpr const char* IDMAP_SUFFIX = "@idmap";
 static constexpr int kVerityPageSize = 4096;
 static constexpr size_t kSha256Size = 32;
 static constexpr const char* kPropApkVerityMode = "ro.apk_verity.mode";
+static constexpr const char* kFuseProp = "persist.sys.fuse";
 
 namespace {
 
@@ -592,12 +593,21 @@ binder::Status InstalldNativeService::clearAppData(const std::unique_ptr<std::st
         std::lock_guard<std::recursive_mutex> lock(mMountsLock);
         for (const auto& n : mStorageMounts) {
             auto extPath = n.second;
-            if (n.first.compare(0, 14, "/mnt/media_rw/") != 0) {
-                extPath += StringPrintf("/%d", userId);
-            } else if (userId != 0) {
-                // TODO: support devices mounted under secondary users
-                continue;
+
+            if (android::base::GetBoolProperty(kFuseProp, false)) {
+                std::regex re("^\\/mnt\\/pass_through\\/[0-9]+\\/emulated");
+                if (std::regex_match(extPath, re)) {
+                    extPath += "/" + std::to_string(userId);
+                }
+            } else {
+                if (n.first.compare(0, 14, "/mnt/media_rw/") != 0) {
+                    extPath += StringPrintf("/%d", userId);
+                } else if (userId != 0) {
+                    // TODO: support devices mounted under secondary users
+                    continue;
+                }
             }
+
             if (flags & FLAG_CLEAR_CACHE_ONLY) {
                 // Clear only cached data from shared storage
                 auto path = StringPrintf("%s/Android/data/%s/cache", extPath.c_str(), pkgname);
@@ -688,16 +698,26 @@ binder::Status InstalldNativeService::destroyAppData(const std::unique_ptr<std::
         std::lock_guard<std::recursive_mutex> lock(mMountsLock);
         for (const auto& n : mStorageMounts) {
             auto extPath = n.second;
-            if (n.first.compare(0, 14, "/mnt/media_rw/") != 0) {
-                extPath += StringPrintf("/%d", userId);
-            } else if (userId != 0) {
-                // TODO: support devices mounted under secondary users
-                continue;
+
+            if (android::base::GetBoolProperty(kFuseProp, false)) {
+                std::regex re("^\\/mnt\\/pass_through\\/[0-9]+\\/emulated");
+                if (std::regex_match(extPath, re)) {
+                    extPath += "/" + std::to_string(userId);
+                }
+            } else {
+                if (n.first.compare(0, 14, "/mnt/media_rw/") != 0) {
+                    extPath += StringPrintf("/%d", userId);
+                } else if (userId != 0) {
+                    // TODO: support devices mounted under secondary users
+                    continue;
+                }
             }
+
             auto path = StringPrintf("%s/Android/data/%s", extPath.c_str(), pkgname);
             if (delete_dir_contents_and_dir(path, true) != 0) {
                 res = error("Failed to delete contents of " + path);
             }
+
             path = StringPrintf("%s/Android/media/%s", extPath.c_str(), pkgname);
             if (delete_dir_contents_and_dir(path, true) != 0) {
                 res = error("Failed to delete contents of " + path);
@@ -2778,12 +2798,21 @@ binder::Status InstalldNativeService::invalidateMounts() {
         std::getline(in, target, ' ');
         std::getline(in, ignored);
 
+        if (android::base::GetBoolProperty(kFuseProp, false)) {
+            // TODO(b/146139106): Use sdcardfs mounts on devices running sdcardfs so we don't bypass
+            // it's VFS cache
+            if (target.compare(0, 17, "/mnt/pass_through") == 0) {
+                LOG(DEBUG) << "Found storage mount " << source << " at " << target;
+                mStorageMounts[source] = target;
+            }
+        } else {
 #if !BYPASS_SDCARDFS
-        if (target.compare(0, 21, "/mnt/runtime/default/") == 0) {
-            LOG(DEBUG) << "Found storage mount " << source << " at " << target;
-            mStorageMounts[source] = target;
-        }
+            if (target.compare(0, 21, "/mnt/runtime/default/") == 0) {
+                LOG(DEBUG) << "Found storage mount " << source << " at " << target;
+                mStorageMounts[source] = target;
+            }
 #endif
+        }
     }
     return ok();
 }
@@ -2793,6 +2822,17 @@ std::string InstalldNativeService::findDataMediaPath(
     std::lock_guard<std::recursive_mutex> lock(mMountsLock);
     const char* uuid_ = uuid ? uuid->c_str() : nullptr;
     auto path = StringPrintf("%s/media", create_data_path(uuid_).c_str());
+    if (android::base::GetBoolProperty(kFuseProp, false)) {
+        // TODO(b/146139106): This is only safe on devices not running sdcardfs where there is no
+        // risk of bypassing the sdcardfs VFS cache
+
+        // Always use the lower filesystem path on FUSE enabled devices not running sdcardfs
+        // The upper filesystem path, /mnt/pass_through/<userid>/<vol>/ which was a bind mount
+        // to the lower filesytem may have been unmounted already when a user is
+        // removed and the path will now be pointing to a tmpfs without content
+        return StringPrintf("%s/%u", path.c_str(), userid);
+    }
+
     auto resolved = mStorageMounts[path];
     if (resolved.empty()) {
         LOG(WARNING) << "Failed to find storage mount for " << path;
