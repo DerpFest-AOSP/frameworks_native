@@ -30,7 +30,7 @@ enum {
     FLAG_PRIVATE_VENDOR = 0x10000000,
 };
 
-#if (defined(__ANDROID_VNDK__) && !defined(__ANDROID_APEX__))
+#if defined(__ANDROID_VNDK__) && !defined(__ANDROID_APEX__)
 
 enum {
     FLAG_PRIVATE_LOCAL = FLAG_PRIVATE_VENDOR,
@@ -54,9 +54,11 @@ enum {
 /**
  * This interface has the stability of the system image.
  */
-void AIBinder_markSystemStability(AIBinder* binder);
+__attribute__((weak)) void AIBinder_markSystemStability(AIBinder* binder);
 
 static inline void AIBinder_markCompilationUnitStability(AIBinder* binder) {
+    if (AIBinder_markSystemStability == nullptr) return;
+
     AIBinder_markSystemStability(binder);
 }
 

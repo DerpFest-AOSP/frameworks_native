@@ -16,6 +16,7 @@
 
 #include <BnBinderVendorDoubleLoadTest.h>
 #include <aidl/BnBinderVendorDoubleLoadTest.h>
+#include <aidl/android/os/IServiceManager.h>
 #include <android-base/logging.h>
 #include <android-base/properties.h>
 #include <android-base/strings.h>
@@ -104,9 +105,28 @@ TEST(DoubleBinder, CallIntoNdk) {
 
         std::string outString;
         ScopedAStatus status = server->RepeatString("foo", &outString);
-        EXPECT_EQ(STATUS_OK, AStatus_getExceptionCode(status.get())) << serviceName;
+        EXPECT_EQ(STATUS_OK, AStatus_getExceptionCode(status.get()))
+                << serviceName << " " << status.getDescription();
         EXPECT_EQ("foo", outString) << serviceName;
     }
+}
+
+TEST(DoubleBinder, CallIntoSystemStabilityNdk) {
+    // picking an arbitrary system service
+    SpAIBinder binder = SpAIBinder(AServiceManager_checkService("manager"));
+    ASSERT_NE(nullptr, binder.get());
+
+    // can make stable transaction to system server
+    EXPECT_EQ(STATUS_OK, AIBinder_ping(binder.get()));
+
+    using aidl::android::os::IServiceManager;
+    std::shared_ptr<IServiceManager> manager = IServiceManager::fromBinder(binder);
+    ASSERT_NE(nullptr, manager.get());
+
+    std::vector<std::string> services;
+    ASSERT_EQ(
+            STATUS_BAD_TYPE,
+            manager->listServices(IServiceManager::DUMP_FLAG_PRIORITY_ALL, &services).getStatus());
 }
 
 void initDrivers() {

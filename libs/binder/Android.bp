@@ -89,6 +89,7 @@ cc_library {
         "IResultReceiver.cpp",
         "IServiceManager.cpp",
         "IShellCallback.cpp",
+        "LazyServiceRegistrar.cpp",
         "MemoryBase.cpp",
         "MemoryDealer.cpp",
         "MemoryHeapBase.cpp",
@@ -137,7 +138,6 @@ cc_library {
         "liblog",
         "libcutils",
         "libutils",
-        "libbinderthreadstate",
     ],
 
     header_libs: [
@@ -159,8 +159,21 @@ filegroup {
     name: "libbinder_aidl",
     srcs: [
         "aidl/android/content/pm/IPackageManagerNative.aidl",
+        "aidl/android/os/IClientCallback.aidl",
         "aidl/android/os/IServiceCallback.aidl",
         "aidl/android/os/IServiceManager.aidl",
     ],
     path: "aidl",
+}
+
+aidl_interface {
+    name: "libbinder_aidl_test_stub",
+    local_include_dir: "aidl",
+    srcs: [":libbinder_aidl"],
+    vendor_available: true,
+    backend: {
+        java: {
+            enabled: false,
+        },
+    },
 }

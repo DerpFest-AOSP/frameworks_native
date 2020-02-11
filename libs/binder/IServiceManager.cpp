@@ -72,6 +72,7 @@ public:
                         bool allowIsolated, int dumpsysPriority) override;
     Vector<String16> listServices(int dumpsysPriority) override;
     sp<IBinder> waitForService(const String16& name16) override;
+    bool isDeclared(const String16& name) override;
 
     // for legacy ABI
     const String16& getInterfaceDescriptor() const override {
@@ -84,25 +85,36 @@ private:
     sp<AidlServiceManager> mTheRealServiceManager;
 };
 
+static std::once_flag gSmOnce;
+static sp<IServiceManager> gDefaultServiceManager;
+
 sp<IServiceManager> defaultServiceManager()
 {
-    static Mutex gDefaultServiceManagerLock;
-    static sp<IServiceManager> gDefaultServiceManager;
-
-    if (gDefaultServiceManager != nullptr) return gDefaultServiceManager;
-
-    {
-        AutoMutex _l(gDefaultServiceManagerLock);
-        while (gDefaultServiceManager == nullptr) {
-            gDefaultServiceManager = new ServiceManagerShim(
-                interface_cast<AidlServiceManager>(
-                    ProcessState::self()->getContextObject(nullptr)));
-            if (gDefaultServiceManager == nullptr)
+    std::call_once(gSmOnce, []() {
+        sp<AidlServiceManager> sm = nullptr;
+        while (sm == nullptr) {
+            sm = interface_cast<AidlServiceManager>(ProcessState::self()->getContextObject(nullptr));
+            if (sm == nullptr) {
                 sleep(1);
+            }
         }
-    }
+
+        gDefaultServiceManager = new ServiceManagerShim(sm);
+    });
 
     return gDefaultServiceManager;
+}
+
+void setDefaultServiceManager(const sp<IServiceManager>& sm) {
+    bool called = false;
+    std::call_once(gSmOnce, [&]() {
+        gDefaultServiceManager = sm;
+        called = true;
+    });
+
+    if (!called) {
+        LOG_ALWAYS_FATAL("setDefaultServiceManager() called after defaultServiceManager().");
+    }
 }
 
 #if !defined(__ANDROID_VNDK__) && defined(__ANDROID__)
@@ -270,6 +282,8 @@ sp<IBinder> ServiceManagerShim::waitForService(const String16& name16)
             std::unique_lock<std::mutex> lock(mMutex);
             mBinder = binder;
             lock.unlock();
+            // Flushing here helps ensure the service's ref count remains accurate
+            IPCThreadState::self()->flushCommands();
             mCv.notify_one();
             return Status::ok();
         }
@@ -279,19 +293,31 @@ sp<IBinder> ServiceManagerShim::waitForService(const String16& name16)
         std::condition_variable mCv;
     };
 
+    // Simple RAII object to ensure a function call immediately before going out of scope
+    class Defer {
+    public:
+        Defer(std::function<void()>&& f) : mF(std::move(f)) {}
+        ~Defer() { mF(); }
+    private:
+        std::function<void()> mF;
+    };
+
     const std::string name = String8(name16).c_str();
 
     sp<IBinder> out;
     if (!mTheRealServiceManager->getService(name, &out).isOk()) {
         return nullptr;
     }
-    if(out != nullptr) return out;
+    if (out != nullptr) return out;
 
     sp<Waiter> waiter = new Waiter;
     if (!mTheRealServiceManager->registerForNotifications(
             name, waiter).isOk()) {
         return nullptr;
     }
+    Defer unregister ([&] {
+        mTheRealServiceManager->unregisterForNotifications(name, waiter);
+    });
 
     while(true) {
         {
@@ -315,10 +341,18 @@ sp<IBinder> ServiceManagerShim::waitForService(const String16& name16)
         if (!mTheRealServiceManager->getService(name, &out).isOk()) {
             return nullptr;
         }
-        if(out != nullptr) return out;
+        if (out != nullptr) return out;
 
         ALOGW("Waited one second for %s", name.c_str());
     }
+}
+
+bool ServiceManagerShim::isDeclared(const String16& name) {
+    bool declared;
+    if (!mTheRealServiceManager->isDeclared(String8(name).c_str(), &declared).isOk()) {
+        return false;
+    }
+    return declared;
 }
 
 } // namespace android
