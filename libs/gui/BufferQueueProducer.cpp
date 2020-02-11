@@ -936,6 +936,15 @@ status_t BufferQueueProducer::queueBuffer(int slot,
                     }
                 }
 
+                // Make sure to merge the damage rect from the frame we're about
+                // to drop into the new frame's damage rect.
+                if (last.mSurfaceDamage.bounds() == Rect::INVALID_RECT ||
+                    item.mSurfaceDamage.bounds() == Rect::INVALID_RECT) {
+                    item.mSurfaceDamage = Region::INVALID_REGION;
+                } else {
+                    item.mSurfaceDamage |= last.mSurfaceDamage;
+                }
+
                 // Overwrite the droppable buffer with the incoming one
                 mCore->mQueue.editItemAt(mCore->mQueue.size() - 1) = item;
                 frameReplacedListener = mCore->mConsumerListener;
@@ -972,6 +981,17 @@ status_t BufferQueueProducer::queueBuffer(int slot,
         item.mGraphicBuffer.clear();
     }
 
+    // Update and get FrameEventHistory.
+    nsecs_t postedTime = systemTime(SYSTEM_TIME_MONOTONIC);
+    NewFrameEventsEntry newFrameEventsEntry = {
+        currentFrameNumber,
+        postedTime,
+        requestedPresentTimestamp,
+        std::move(acquireFenceTime)
+    };
+    addAndGetFrameTimestamps(&newFrameEventsEntry,
+            getFrameTimestamps ? &output->frameTimestamps : nullptr);
+
     // Call back without the main BufferQueue lock held, but with the callback
     // lock held so we can ensure that callbacks occur in order
 
@@ -1000,17 +1020,6 @@ status_t BufferQueueProducer::queueBuffer(int slot,
         ++mCurrentCallbackTicket;
         mCallbackCondition.notify_all();
     }
-
-    // Update and get FrameEventHistory.
-    nsecs_t postedTime = systemTime(SYSTEM_TIME_MONOTONIC);
-    NewFrameEventsEntry newFrameEventsEntry = {
-        currentFrameNumber,
-        postedTime,
-        requestedPresentTimestamp,
-        std::move(acquireFenceTime)
-    };
-    addAndGetFrameTimestamps(&newFrameEventsEntry,
-            getFrameTimestamps ? &output->frameTimestamps : nullptr);
 
     // Wait without lock held
     if (connectedApi == NATIVE_WINDOW_API_EGL) {

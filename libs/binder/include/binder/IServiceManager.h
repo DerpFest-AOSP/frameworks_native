@@ -88,14 +88,58 @@ public:
      * Returns nullptr only for permission problem or fatal error.
      */
     virtual sp<IBinder> waitForService(const String16& name) = 0;
+
+    /**
+     * Check if a service is declared (e.g. VINTF manifest).
+     *
+     * If this returns true, waitForService should always be able to return the
+     * service.
+     */
+    virtual bool isDeclared(const String16& name) = 0;
 };
 
 sp<IServiceManager> defaultServiceManager();
+
+/**
+ * Directly set the default service manager. Only used for testing.
+ * Note that the caller is responsible for caling this method
+ * *before* any call to defaultServiceManager(); if the latter is
+ * called first, setDefaultServiceManager() will abort.
+ */
+void setDefaultServiceManager(const sp<IServiceManager>& sm);
 
 template<typename INTERFACE>
 sp<INTERFACE> waitForService(const String16& name) {
     const sp<IServiceManager> sm = defaultServiceManager();
     return interface_cast<INTERFACE>(sm->waitForService(name));
+}
+
+template<typename INTERFACE>
+sp<INTERFACE> waitForDeclaredService(const String16& name) {
+    const sp<IServiceManager> sm = defaultServiceManager();
+    if (!sm->isDeclared(name)) return nullptr;
+    return interface_cast<INTERFACE>(sm->waitForService(name));
+}
+
+template <typename INTERFACE>
+sp<INTERFACE> checkDeclaredService(const String16& name) {
+    const sp<IServiceManager> sm = defaultServiceManager();
+    if (!sm->isDeclared(name)) return nullptr;
+    return interface_cast<INTERFACE>(sm->checkService(name));
+}
+
+template<typename INTERFACE>
+sp<INTERFACE> waitForVintfService(
+        const String16& instance = String16("default")) {
+    return waitForDeclaredService<INTERFACE>(
+        INTERFACE::descriptor + String16("/") + instance);
+}
+
+template<typename INTERFACE>
+sp<INTERFACE> checkVintfService(
+        const String16& instance = String16("default")) {
+    return checkDeclaredService<INTERFACE>(
+        INTERFACE::descriptor + String16("/") + instance);
 }
 
 template<typename INTERFACE>

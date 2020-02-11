@@ -20,6 +20,7 @@
 
 #include <ui/GraphicBufferAllocator.h>
 
+#include <limits.h>
 #include <stdio.h>
 
 #include <grallocusage/GrallocUsageConversion.h>
@@ -60,9 +61,9 @@ GraphicBufferAllocator::GraphicBufferAllocator() : mMapper(GraphicBufferMapper::
 
 GraphicBufferAllocator::~GraphicBufferAllocator() {}
 
-size_t GraphicBufferAllocator::getTotalSize() const {
+uint64_t GraphicBufferAllocator::getTotalSize() const {
     Mutex::Autolock _l(sLock);
-    size_t total = 0;
+    uint64_t total = 0;
     for (size_t i = 0; i < sAllocList.size(); ++i) {
         total += sAllocList.valueAt(i).size;
     }
@@ -72,7 +73,7 @@ size_t GraphicBufferAllocator::getTotalSize() const {
 void GraphicBufferAllocator::dump(std::string& result) const {
     Mutex::Autolock _l(sLock);
     KeyedVector<buffer_handle_t, alloc_rec_t>& list(sAllocList);
-    size_t total = 0;
+    uint64_t total = 0;
     result.append("Allocated buffers:\n");
     const size_t c = list.size();
     for (size_t i=0 ; i<c ; i++) {
@@ -80,7 +81,7 @@ void GraphicBufferAllocator::dump(std::string& result) const {
         if (rec.size) {
             StringAppendF(&result,
                           "%10p: %7.2f KiB | %4u (%4u) x %4u | %4u | %8X | 0x%" PRIx64 " | %s\n",
-                          list.keyAt(i), rec.size / 1024.0, rec.width, rec.stride, rec.height,
+                          list.keyAt(i), static_cast<double>(rec.size) / 1024.0, rec.width, rec.stride, rec.height,
                           rec.layerCount, rec.format, rec.usage, rec.requestorName.c_str());
         } else {
             StringAppendF(&result,
@@ -90,7 +91,7 @@ void GraphicBufferAllocator::dump(std::string& result) const {
         }
         total += rec.size;
     }
-    StringAppendF(&result, "Total allocated (estimate): %.2f KB\n", total / 1024.0);
+    StringAppendF(&result, "Total allocated (estimate): %.2f KB\n", static_cast<double>(total) / 1024.0);
 
     result.append(mAllocator->dumpDebugInfo());
 }
@@ -114,6 +115,14 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
     if (!width || !height)
         width = height = 1;
 
+    const uint32_t bpp = bytesPerPixel(format);
+    if (std::numeric_limits<size_t>::max() / width / height < static_cast<size_t>(bpp)) {
+        ALOGE("Failed to allocate (%u x %u) layerCount %u format %d "
+              "usage %" PRIx64 ": Requesting too large a buffer size",
+              width, height, layerCount, format, usage);
+        return BAD_VALUE;
+    }
+
     // Ensure that layerCount is valid.
     if (layerCount < 1)
         layerCount = 1;
@@ -126,7 +135,6 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
     if (error == NO_ERROR) {
         Mutex::Autolock _l(sLock);
         KeyedVector<buffer_handle_t, alloc_rec_t>& list(sAllocList);
-        uint32_t bpp = bytesPerPixel(format);
         alloc_rec_t rec;
         rec.width = width;
         rec.height = height;

@@ -1,6 +1,5 @@
-#!/usr/bin/env bash
-
-# Copyright (C) 2018 The Android Open Source Project
+#
+# Copyright 2019 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,10 +12,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
 
+# Provides overrides to configure the Dalvik heap for a 4GB phone
 
-set -ex
-
-# This script makes sure that the source code is in sync with the various scripts
-./scripts/gen_parcel_helper.py
-./scripts/format.sh
+PRODUCT_PROPERTY_OVERRIDES += \
+    dalvik.vm.heapstartsize=8m \
+    dalvik.vm.heapgrowthlimit=192m \
+    dalvik.vm.heapsize=512m \
+    dalvik.vm.heaptargetutilization=0.6 \
+    dalvik.vm.heapminfree=8m \
+    dalvik.vm.heapmaxfree=16m

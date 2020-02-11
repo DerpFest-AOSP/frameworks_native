@@ -16,6 +16,7 @@
 
 package android.os;
 
+import android.os.IClientCallback;
 import android.os.IServiceCallback;
 
 /**
@@ -31,22 +32,22 @@ interface IServiceManager {
      * Must update values in IServiceManager.h
      */
     /* Allows services to dump sections according to priorities. */
-    const int DUMP_FLAG_PRIORITY_CRITICAL = 1; // 1 << 0
-    const int DUMP_FLAG_PRIORITY_HIGH = 2; // 1 << 1
-    const int DUMP_FLAG_PRIORITY_NORMAL = 4; // 1 << 2
+    const int DUMP_FLAG_PRIORITY_CRITICAL = 1 << 0;
+    const int DUMP_FLAG_PRIORITY_HIGH = 1 << 1;
+    const int DUMP_FLAG_PRIORITY_NORMAL = 1 << 2;
     /**
      * Services are by default registered with a DEFAULT dump priority. DEFAULT priority has the
      * same priority as NORMAL priority but the services are not called with dump priority
      * arguments.
      */
-    const int DUMP_FLAG_PRIORITY_DEFAULT = 8; // 1 << 3
+    const int DUMP_FLAG_PRIORITY_DEFAULT = 1 << 3;
 
     const int DUMP_FLAG_PRIORITY_ALL = 15;
              // DUMP_FLAG_PRIORITY_CRITICAL | DUMP_FLAG_PRIORITY_HIGH
              // | DUMP_FLAG_PRIORITY_NORMAL | DUMP_FLAG_PRIORITY_DEFAULT;
 
     /* Allows services to dump sections in protobuf format. */
-    const int DUMP_FLAG_PROTO = 16; // 1 << 4
+    const int DUMP_FLAG_PROTO = 1 << 4;
 
     /**
      * Retrieve an existing service called @a name from the
@@ -58,7 +59,7 @@ interface IServiceManager {
      * Returns null if the service does not exist.
      */
     @UnsupportedAppUsage
-    IBinder getService(@utf8InCpp String name);
+    @nullable IBinder getService(@utf8InCpp String name);
 
     /**
      * Retrieve an existing service called @a name from the service
@@ -66,7 +67,7 @@ interface IServiceManager {
      * exist.
      */
     @UnsupportedAppUsage
-    IBinder checkService(@utf8InCpp String name);
+    @nullable IBinder checkService(@utf8InCpp String name);
 
     /**
      * Place a new @a service called @a name into the service
@@ -89,4 +90,22 @@ interface IServiceManager {
      * Unregisters all requests for notifications for a specific callback.
      */
     void unregisterForNotifications(@utf8InCpp String name, IServiceCallback callback);
+
+    /**
+     * Returns whether a given interface is declared on the device, even if it
+     * is not started yet. For instance, this could be a service declared in the VINTF
+     * manifest.
+     */
+    boolean isDeclared(@utf8InCpp String name);
+
+    /**
+     * Request a callback when the number of clients of the service changes.
+     * Used by LazyServiceRegistrar to dynamically stop services that have no clients.
+     */
+    void registerClientCallback(@utf8InCpp String name, IBinder service, IClientCallback callback);
+
+    /**
+     * Attempt to unregister and remove a service. Will fail if the service is still in use.
+     */
+    void tryUnregisterService(@utf8InCpp String name, IBinder service);
 }
