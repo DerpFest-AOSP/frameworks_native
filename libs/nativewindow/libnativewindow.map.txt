@@ -30,6 +30,10 @@ LIBNATIVEWINDOW {
     ANativeWindow_query; # llndk
     ANativeWindow_queryf; # llndk
     ANativeWindow_queueBuffer; # llndk
+    ANativeWindow_setCancelBufferInterceptor; # apex # introduced=30
+    ANativeWindow_setDequeueBufferInterceptor; # apex # introduced=30
+    ANativeWindow_setPerformInterceptor; # apex # introduced=30
+    ANativeWindow_setQueueBufferInterceptor; # apex # introduced=30
     ANativeWindow_release;
     ANativeWindow_setAutoPrerotation; # llndk
     ANativeWindow_setAutoRefresh; # llndk
@@ -41,9 +45,11 @@ LIBNATIVEWINDOW {
     ANativeWindow_setBuffersTimestamp; # llndk
     ANativeWindow_setBuffersTransform;
     ANativeWindow_setDequeueTimeout; # apex # introduced=30
+    ANativeWindow_setFrameRate; # introduced=30
     ANativeWindow_setSharedBufferMode; # llndk
     ANativeWindow_setSwapInterval; # llndk
     ANativeWindow_setUsage; # llndk
+    ANativeWindow_tryAllocateBuffers; # introduced=30
     ANativeWindow_unlockAndPost;
   local:
     *;
