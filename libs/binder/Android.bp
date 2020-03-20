@@ -73,7 +73,6 @@ cc_library {
     // or dessert updates. Instead, apex users should use libbinder_ndk.
     apex_available: [
         "//apex_available:platform",
-        "com.android.vndk.current",
         // TODO(b/139016109) remove these three
         "com.android.media.swcodec",
         "test_com.android.media.swcodec",
@@ -90,6 +89,7 @@ cc_library {
         "IResultReceiver.cpp",
         "IServiceManager.cpp",
         "IShellCallback.cpp",
+        "LazyServiceRegistrar.cpp",
         "MemoryBase.cpp",
         "MemoryDealer.cpp",
         "MemoryHeapBase.cpp",
@@ -138,7 +138,6 @@ cc_library {
         "liblog",
         "libcutils",
         "libutils",
-        "libbinderthreadstate",
     ],
 
     header_libs: [
@@ -160,6 +159,7 @@ filegroup {
     name: "libbinder_aidl",
     srcs: [
         "aidl/android/content/pm/IPackageManagerNative.aidl",
+        "aidl/android/os/IClientCallback.aidl",
         "aidl/android/os/IServiceCallback.aidl",
         "aidl/android/os/IServiceManager.aidl",
     ],
@@ -170,7 +170,6 @@ aidl_interface {
     name: "libbinder_aidl_test_stub",
     local_include_dir: "aidl",
     srcs: [":libbinder_aidl"],
-    visibility: [":__subpackages__"],
     vendor_available: true,
     backend: {
         java: {

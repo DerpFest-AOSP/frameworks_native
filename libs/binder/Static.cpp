@@ -19,7 +19,7 @@
 
 #include "Static.h"
 
-#include <binder/BufferedTextOutput.h>
+#include "BufferedTextOutput.h"
 #include <binder/IPCThreadState.h>
 #include <utils/Log.h>
 
@@ -64,13 +64,9 @@ private:
     int mFD;
 };
 
-static LogTextOutput gLogTextOutput;
-static FdTextOutput gStdoutTextOutput(STDOUT_FILENO);
-static FdTextOutput gStderrTextOutput(STDERR_FILENO);
-
-TextOutput& alog(gLogTextOutput);
-TextOutput& aout(gStdoutTextOutput);
-TextOutput& aerr(gStderrTextOutput);
+TextOutput& alog(*new LogTextOutput());
+TextOutput& aout(*new FdTextOutput(STDOUT_FILENO));
+TextOutput& aerr(*new FdTextOutput(STDERR_FILENO));
 
 // ------------ ProcessState.cpp
 

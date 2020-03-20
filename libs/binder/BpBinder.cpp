@@ -138,6 +138,7 @@ BpBinder* BpBinder::create(int32_t handle) {
 
 BpBinder::BpBinder(int32_t handle, int32_t trackedUid)
     : mHandle(handle)
+    , mStability(0)
     , mAlive(1)
     , mObitsSent(0)
     , mObituaries(nullptr)
@@ -435,7 +436,8 @@ void BpBinder::onLastStrongRef(const void* /*id*/)
     Vector<Obituary>* obits = mObituaries;
     if(obits != nullptr) {
         if (!obits->isEmpty()) {
-            ALOGI("onLastStrongRef automatically unlinking death recipients");
+            ALOGI("onLastStrongRef automatically unlinking death recipients: %s",
+                  mDescriptorCache.size() ? String8(mDescriptorCache).c_str() : "<uncached descriptor>");
         }
 
         if (ipc) ipc->clearDeathNotification(mHandle, this);
