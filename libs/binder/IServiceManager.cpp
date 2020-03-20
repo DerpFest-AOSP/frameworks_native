@@ -85,25 +85,36 @@ private:
     sp<AidlServiceManager> mTheRealServiceManager;
 };
 
+static std::once_flag gSmOnce;
+static sp<IServiceManager> gDefaultServiceManager;
+
 sp<IServiceManager> defaultServiceManager()
 {
-    static Mutex gDefaultServiceManagerLock;
-    static sp<IServiceManager> gDefaultServiceManager;
-
-    if (gDefaultServiceManager != nullptr) return gDefaultServiceManager;
-
-    {
-        AutoMutex _l(gDefaultServiceManagerLock);
-        while (gDefaultServiceManager == nullptr) {
-            gDefaultServiceManager = new ServiceManagerShim(
-                interface_cast<AidlServiceManager>(
-                    ProcessState::self()->getContextObject(nullptr)));
-            if (gDefaultServiceManager == nullptr)
+    std::call_once(gSmOnce, []() {
+        sp<AidlServiceManager> sm = nullptr;
+        while (sm == nullptr) {
+            sm = interface_cast<AidlServiceManager>(ProcessState::self()->getContextObject(nullptr));
+            if (sm == nullptr) {
                 sleep(1);
+            }
         }
-    }
+
+        gDefaultServiceManager = new ServiceManagerShim(sm);
+    });
 
     return gDefaultServiceManager;
+}
+
+void setDefaultServiceManager(const sp<IServiceManager>& sm) {
+    bool called = false;
+    std::call_once(gSmOnce, [&]() {
+        gDefaultServiceManager = sm;
+        called = true;
+    });
+
+    if (!called) {
+        LOG_ALWAYS_FATAL("setDefaultServiceManager() called after defaultServiceManager().");
+    }
 }
 
 #if !defined(__ANDROID_VNDK__) && defined(__ANDROID__)
@@ -271,6 +282,8 @@ sp<IBinder> ServiceManagerShim::waitForService(const String16& name16)
             std::unique_lock<std::mutex> lock(mMutex);
             mBinder = binder;
             lock.unlock();
+            // Flushing here helps ensure the service's ref count remains accurate
+            IPCThreadState::self()->flushCommands();
             mCv.notify_one();
             return Status::ok();
         }

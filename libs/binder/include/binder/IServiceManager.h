@@ -100,6 +100,14 @@ public:
 
 sp<IServiceManager> defaultServiceManager();
 
+/**
+ * Directly set the default service manager. Only used for testing.
+ * Note that the caller is responsible for caling this method
+ * *before* any call to defaultServiceManager(); if the latter is
+ * called first, setDefaultServiceManager() will abort.
+ */
+void setDefaultServiceManager(const sp<IServiceManager>& sm);
+
 template<typename INTERFACE>
 sp<INTERFACE> waitForService(const String16& name) {
     const sp<IServiceManager> sm = defaultServiceManager();

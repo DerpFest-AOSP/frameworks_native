@@ -15,20 +15,21 @@
 cc_defaults {
     name: "idlcli-defaults",
     shared_libs: [
+        "android.hardware.vibrator-ndk_platform",
         "android.hardware.vibrator@1.0",
         "android.hardware.vibrator@1.1",
         "android.hardware.vibrator@1.2",
         "android.hardware.vibrator@1.3",
         "libbase",
-        "libbinder",
+        "libbinder_ndk",
         "libhidlbase",
         "liblog",
         "libutils",
-        "vintf-vibrator-cpp",
     ],
     cflags: [
         "-DLOG_TAG=\"idlcli\"",
     ],
+    vendor_available: true,
 }
 
 cc_library {
