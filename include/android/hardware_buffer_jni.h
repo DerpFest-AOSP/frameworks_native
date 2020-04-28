@@ -42,8 +42,6 @@ __BEGIN_DECLS
  * that is returned. To keep the AHardwareBuffer live after the Java
  * HardwareBuffer object got garbage collected, be sure to use AHardwareBuffer_acquire()
  * to acquire an additional reference.
- *
- * Available since API level 26.
  */
 AHardwareBuffer* AHardwareBuffer_fromHardwareBuffer(JNIEnv* env,
         jobject hardwareBufferObj) __INTRODUCED_IN(26);
@@ -51,8 +49,6 @@ AHardwareBuffer* AHardwareBuffer_fromHardwareBuffer(JNIEnv* env,
 /**
  * Return a new Java HardwareBuffer object that wraps the passed native
  * AHardwareBuffer object.
- *
- * Available since API level 26.
  */
 jobject AHardwareBuffer_toHardwareBuffer(JNIEnv* env,
         AHardwareBuffer* hardwareBuffer) __INTRODUCED_IN(26);

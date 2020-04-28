@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-cc_library_static {
+cc_library_shared {
     name: "liblshal",
     shared_libs: [
         "libbase",
         "libcutils",
         "libutils",
         "libhidlbase",
+        "libhidltransport",
         "libhidl-gen-hash",
         "libhidl-gen-utils",
         "libvintf",
@@ -35,7 +36,6 @@ cc_library_static {
         "TableEntry.cpp",
         "TextTable.cpp",
         "utils.cpp",
-        "WaitCommand.cpp",
     ],
     cflags: [
         "-Wall",
@@ -47,15 +47,13 @@ cc_defaults {
     name: "lshal_defaults",
     shared_libs: [
         "libbase",
-        "libcutils",
-        "libutils",
         "libhidlbase",
-        "libhidl-gen-hash",
         "libhidl-gen-utils",
-        "libvintf",
+        "libhidltransport",
+        "liblshal",
+        "libutils",
     ],
     static_libs: [
-        "liblshal",
         "libprocpartition",
     ],
     cflags: ["-Wall", "-Werror"],
@@ -71,16 +69,14 @@ cc_binary {
 
 cc_test {
     name: "lshal_test",
-    test_suites: ["device-tests"],
     defaults: ["lshal_defaults"],
     gtest: true,
     static_libs: [
-        "android.hardware.tests.baz@1.0",
-        "libgmock",
+        "libgmock"
     ],
     shared_libs: [
-        "libhidlbase",
         "libvintf",
+        "android.hardware.tests.baz@1.0"
     ],
     srcs: [
         "test.cpp"

@@ -43,7 +43,7 @@ java_library_static {
         type: "nano",
     },
     srcs: ["*.proto"],
-    sdk_version: "core_platform",
+    no_framework_libs: true,
     target: {
         android: {
             jarjar_rules: "jarjar-rules.txt",

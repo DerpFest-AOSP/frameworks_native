@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#pragma once
-
 #include <condition_variable>
 #include <chrono>
 #include <functional>

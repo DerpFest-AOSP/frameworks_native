@@ -718,6 +718,8 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
         {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
         {VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
         {VK_FORMAT_R5G6B5_UNORM_PACK16, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
     };
     const uint32_t kNumFormats = sizeof(kFormats) / sizeof(kFormats[0]);
     uint32_t total_num_formats = kNumFormats;
@@ -1278,7 +1280,6 @@ VkResult CreateSwapchainKHR(VkDevice device,
     VkImageCreateInfo image_create = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = &image_native_buffer,
-        .flags = createProtectedSwapchain ? VK_IMAGE_CREATE_PROTECTED_BIT : 0u,
         .imageType = VK_IMAGE_TYPE_2D,
         .format = create_info->imageFormat,
         .extent = {0, 0, 1},
@@ -1287,6 +1288,7 @@ VkResult CreateSwapchainKHR(VkDevice device,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = create_info->imageUsage,
+        .flags = createProtectedSwapchain ? VK_IMAGE_CREATE_PROTECTED_BIT : 0u,
         .sharingMode = create_info->imageSharingMode,
         .queueFamilyIndexCount = create_info->queueFamilyIndexCount,
         .pQueueFamilyIndices = create_info->pQueueFamilyIndices,
@@ -1379,7 +1381,7 @@ void DestroySwapchainKHR(VkDevice device,
     bool active = swapchain->surface.swapchain_handle == swapchain_handle;
     ANativeWindow* window = active ? swapchain->surface.window.get() : nullptr;
 
-    if (window && swapchain->frame_timestamps_enabled) {
+    if (swapchain->frame_timestamps_enabled) {
         native_window_enable_frame_timestamps(window, false);
     }
     for (uint32_t i = 0; i < swapchain->num_images; i++)

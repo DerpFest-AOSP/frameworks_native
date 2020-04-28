@@ -57,6 +57,7 @@ sharedLibraries = [
     "libgui",
     "libsync",
     "libhidlbase",
+    "libhidltransport",
     "libfmq",
     "libpdx_default_transport",
 ]

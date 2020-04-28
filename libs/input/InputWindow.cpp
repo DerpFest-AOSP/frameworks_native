@@ -99,7 +99,7 @@ status_t InputWindowInfo::write(Parcel& output) const {
     applicationInfo.write(output);
     output.write(touchableRegion);
     output.writeBool(replaceTouchableRegionWithCrop);
-    output.writeStrongBinder(touchableRegionCropHandle.promote());
+    output.writeWeakBinder(touchableRegionCropHandle);
     return OK;
 }
 
@@ -142,7 +142,7 @@ InputWindowInfo InputWindowInfo::read(const Parcel& from) {
     ret.applicationInfo = InputApplicationInfo::read(from);
     from.read(ret.touchableRegion);
     ret.replaceTouchableRegionWithCrop = from.readBool();
-    ret.touchableRegionCropHandle = from.readStrongBinder();
+    ret.touchableRegionCropHandle = from.readWeakBinder();
 
     return ret;
 }

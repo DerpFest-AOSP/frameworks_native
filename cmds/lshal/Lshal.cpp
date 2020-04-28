@@ -26,9 +26,7 @@
 #include <hidl/HidlTransportUtils.h>
 
 #include "DebugCommand.h"
-#include "HelpCommand.h"
 #include "ListCommand.h"
-#include "WaitCommand.h"
 #include "PipeRelay.h"
 
 namespace android {
@@ -51,7 +49,6 @@ Lshal::Lshal(std::ostream &out, std::ostream &err,
     mRegisteredCommands.push_back({std::make_unique<ListCommand>(*this)});
     mRegisteredCommands.push_back({std::make_unique<DebugCommand>(*this)});
     mRegisteredCommands.push_back({std::make_unique<HelpCommand>(*this)});
-    mRegisteredCommands.push_back({std::make_unique<WaitCommand>(*this)});
 }
 
 void Lshal::forEachCommand(const std::function<void(const Command* c)>& f) const {

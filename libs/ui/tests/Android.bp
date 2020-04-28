@@ -58,6 +58,7 @@ cc_test {
         "android.frameworks.bufferhub@1.0",
         "libcutils",
         "libhidlbase",
+        "libhwbinder",
         "libui",
         "libutils",
     ],
@@ -78,6 +79,7 @@ cc_test {
         "android.frameworks.bufferhub@1.0",
         "libcutils",
         "libhidlbase",
+        "libhwbinder",
         "liblog",
         "libui",
         "libutils"

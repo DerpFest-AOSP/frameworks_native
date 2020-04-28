@@ -127,10 +127,10 @@ input_device_identifier_t* InputDriver::createDeviceIdentifier(
             input_bus_t bus, const char* uniqueId) {
     auto identifier = new ::input_device_identifier {
         .name = name,
-        .uniqueId = uniqueId,
-        .bus = bus,
-        .vendorId = vendorId,
         .productId = productId,
+        .vendorId = vendorId,
+        .bus = bus,
+        .uniqueId = uniqueId,
     };
     // TODO: store this identifier somewhere
     return identifier;

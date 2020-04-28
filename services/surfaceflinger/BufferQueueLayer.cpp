@@ -243,9 +243,8 @@ bool BufferQueueLayer::latchSidebandStream(bool& recomputeVisibleRegions) {
     bool sidebandStreamChanged = true;
     if (mSidebandStreamChanged.compare_exchange_strong(sidebandStreamChanged, false)) {
         // mSidebandStreamChanged was changed to false
-        mSidebandStream = mConsumer->getSidebandStream();
         auto& layerCompositionState = getCompositionLayer()->editState().frontEnd;
-        layerCompositionState.sidebandStream = mSidebandStream;
+        layerCompositionState.sidebandStream = mConsumer->getSidebandStream();
         if (layerCompositionState.sidebandStream != nullptr) {
             setTransactionFlags(eTransactionNeeded);
             mFlinger->setTransactionFlags(eTraversalNeeded);
@@ -462,6 +461,7 @@ void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
             status_t result = mQueueItemCondition.waitRelative(mQueueItemLock, ms2ns(500));
             if (result != NO_ERROR) {
                 ALOGE("[%s] Timed out waiting on callback", mName.string());
+                break;
             }
         }
 
@@ -496,6 +496,7 @@ void BufferQueueLayer::onFrameReplaced(const BufferItem& item) {
             status_t result = mQueueItemCondition.waitRelative(mQueueItemLock, ms2ns(500));
             if (result != NO_ERROR) {
                 ALOGE("[%s] Timed out waiting on callback", mName.string());
+                break;
             }
         }
 

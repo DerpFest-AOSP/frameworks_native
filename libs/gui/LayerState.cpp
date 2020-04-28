@@ -87,7 +87,7 @@ status_t layer_state_t::write(Parcel& output) const
            colorTransform.asArray(), 16 * sizeof(float));
     output.writeFloat(cornerRadius);
     output.writeBool(hasListenerCallbacks);
-    output.writeStrongBinder(cachedBuffer.token.promote());
+    output.writeWeakBinder(cachedBuffer.token);
     output.writeUint64(cachedBuffer.id);
     output.writeParcelable(metadata);
 
@@ -157,7 +157,7 @@ status_t layer_state_t::read(const Parcel& input)
     colorTransform = mat4(static_cast<const float*>(input.readInplace(16 * sizeof(float))));
     cornerRadius = input.readFloat();
     hasListenerCallbacks = input.readBool();
-    cachedBuffer.token = input.readStrongBinder();
+    cachedBuffer.token = input.readWeakBinder();
     cachedBuffer.id = input.readUint64();
     input.readParcelable(&metadata);
 

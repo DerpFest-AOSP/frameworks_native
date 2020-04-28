@@ -21,14 +21,15 @@
  * Native input manager.
  */
 
-#include "InputClassifier.h"
+#include "EventHub.h"
 #include "InputReaderBase.h"
+#include "InputClassifier.h"
+#include "InputDispatcher.h"
+#include "InputReader.h"
 
-#include <InputDispatcherInterface.h>
-#include <InputDispatcherPolicyInterface.h>
-#include <input/ISetInputWindowsListener.h>
 #include <input/Input.h>
 #include <input/InputTransport.h>
+#include <input/ISetInputWindowsListener.h>
 
 #include <input/IInputFlinger.h>
 #include <utils/Errors.h>
@@ -38,7 +39,6 @@
 
 namespace android {
 class InputChannel;
-class InputDispatcherThread;
 
 /*
  * The input manager is the core of the system event processing.
@@ -96,10 +96,11 @@ public:
 
     virtual void setInputWindows(const std::vector<InputWindowInfo>& handles,
             const sp<ISetInputWindowsListener>& setInputWindowsListener);
-    virtual void transferTouchFocus(const sp<IBinder>& fromToken, const sp<IBinder>& toToken);
 
     virtual void registerInputChannel(const sp<InputChannel>& channel);
     virtual void unregisterInputChannel(const sp<InputChannel>& channel);
+
+    void setMotionClassifierEnabled(bool enabled);
 
 private:
     sp<InputReaderInterface> mReader;

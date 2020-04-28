@@ -20,8 +20,6 @@ cc_library {
         enabled: true,
         support_system_process: true,
     },
-    host_supported: true,
-
     srcs: [
         "IPCThreadStateBase.cpp",
     ],

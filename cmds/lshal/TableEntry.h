@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef FRAMEWORK_NATIVE_CMDS_LSHAL_TABLE_ENTRY_H_
+#define FRAMEWORK_NATIVE_CMDS_LSHAL_TABLE_ENTRY_H_
 
 #include <stdint.h>
 
@@ -156,3 +157,5 @@ private:
 
 }  // namespace lshal
 }  // namespace android
+
+#endif  // FRAMEWORK_NATIVE_CMDS_LSHAL_TABLE_ENTRY_H_

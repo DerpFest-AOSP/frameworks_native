@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef FRAMEWORK_NATIVE_CMDS_LSHAL_COMMAND_H_
+#define FRAMEWORK_NATIVE_CMDS_LSHAL_COMMAND_H_
 
 #include "utils.h"
 
@@ -47,3 +48,5 @@ protected:
 
 }  // namespace lshal
 }  // namespace android
+
+#endif  // FRAMEWORK_NATIVE_CMDS_LSHAL_LIST_COMMAND_H_

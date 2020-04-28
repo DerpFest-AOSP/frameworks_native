@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef FRAMEWORK_NATIVE_CMDS_LSHAL_DEBUG_COMMAND_H_
+#define FRAMEWORK_NATIVE_CMDS_LSHAL_DEBUG_COMMAND_H_
 
 #include <string>
 
@@ -52,3 +53,5 @@ private:
 
 }  // namespace lshal
 }  // namespace android
+
+#endif  // FRAMEWORK_NATIVE_CMDS_LSHAL_DEBUG_COMMAND_H_

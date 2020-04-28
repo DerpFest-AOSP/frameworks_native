@@ -263,8 +263,7 @@ public:
     status_t postMessageAsync(const sp<MessageBase>& msg, nsecs_t reltime = 0, uint32_t flags = 0);
 
     // post a synchronous message to the main thread
-    status_t postMessageSync(const sp<MessageBase>& msg, nsecs_t reltime = 0, uint32_t flags = 0)
-            EXCLUDES(mStateLock);
+    status_t postMessageSync(const sp<MessageBase>& msg, nsecs_t reltime = 0, uint32_t flags = 0);
 
     // force full composition on all displays
     void repaintEverything();
@@ -554,9 +553,9 @@ private:
     void updateInputFlinger();
     void updateInputWindowInfo();
     void commitInputWindowCommands() REQUIRES(mStateLock);
-    void executeInputWindowCommands();
     void setInputWindowsFinished();
     void updateCursorAsync();
+    void initScheduler(DisplayId primaryDisplayId);
 
     /* handlePageFlip - latch a new buffer if available and compute the dirty
      * region. Returns whether a new buffer has been latched, i.e., whether it
@@ -901,9 +900,8 @@ private:
     void dumpBufferingStats(std::string& result) const;
     void dumpDisplayIdentificationData(std::string& result) const;
     void dumpWideColorInfo(std::string& result) const;
-    LayersProto dumpDrawingStateProto(uint32_t traceFlags = SurfaceTracing::TRACE_ALL) const;
-    LayersProto dumpProtoFromMainThread(uint32_t traceFlags = SurfaceTracing::TRACE_ALL)
-            EXCLUDES(mStateLock);
+    LayersProto dumpProtoInfo(LayerVector::StateSet stateSet,
+                              uint32_t traceFlags = SurfaceTracing::TRACE_ALL) const;
     void withTracingLock(std::function<void()> operation) REQUIRES(mStateLock);
     LayersProto dumpVisibleLayersProtoInfo(const sp<DisplayDevice>& display) const;
 
@@ -1104,9 +1102,6 @@ private:
     // either AID_GRAPHICS or AID_SYSTEM.
     status_t CheckTransactCodeCredentials(uint32_t code);
 
-    // to linkToDeath
-    sp<IBinder> mWindowManager;
-
     std::unique_ptr<dvr::VrFlinger> mVrFlinger;
     std::atomic<bool> mVrFlingerRequestsDisplay = false;
     static bool useVrFlinger;
@@ -1138,8 +1133,8 @@ private:
     sp<Scheduler::ConnectionHandle> mAppConnectionHandle;
     sp<Scheduler::ConnectionHandle> mSfConnectionHandle;
 
-    scheduler::RefreshRateConfigs mRefreshRateConfigs;
-    scheduler::RefreshRateStats mRefreshRateStats{mRefreshRateConfigs, *mTimeStats};
+    std::unique_ptr<scheduler::RefreshRateConfigs> mRefreshRateConfigs;
+    std::unique_ptr<scheduler::RefreshRateStats> mRefreshRateStats;
 
     // All configs are allowed if the set is empty.
     using DisplayConfigs = std::set<int32_t>;

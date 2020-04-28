@@ -832,7 +832,7 @@ static int32_t copy_directory_recursive(const char* from, const char* to) {
     };
 
     LOG(DEBUG) << "Copying " << from << " to " << to;
-    return logwrap_fork_execvp(ARRAY_SIZE(argv), argv, nullptr, false, LOG_ALOG, false, nullptr);
+    return android_fork_execvp(ARRAY_SIZE(argv), argv, nullptr, false, true);
 }
 
 binder::Status InstalldNativeService::snapshotAppData(
@@ -2107,15 +2107,10 @@ binder::Status InstalldNativeService::dexopt(const std::string& apkPath, int32_t
     CHECK_ARGUMENT_PATH(dexMetadataPath);
     std::lock_guard<std::recursive_mutex> lock(mLock);
 
-    const char* oat_dir = getCStr(outputPath);
-    const char* instruction_set = instructionSet.c_str();
-    if (oat_dir != nullptr && !createOatDir(oat_dir, instruction_set).isOk()) {
-        // Can't create oat dir - let dexopt use cache dir.
-        oat_dir = nullptr;
-    }
-
     const char* apk_path = apkPath.c_str();
     const char* pkgname = getCStr(packageName, "*");
+    const char* instruction_set = instructionSet.c_str();
+    const char* oat_dir = getCStr(outputPath);
     const char* compiler_filter = compilerFilter.c_str();
     const char* volume_uuid = getCStr(uuid);
     const char* class_loader_context = getCStr(classLoaderContext);
@@ -2139,26 +2134,6 @@ binder::Status InstalldNativeService::compileLayouts(const std::string& apkPath,
     const char* out_dex_file = outDexFile.c_str();
     *_aidl_return = android::installd::view_compiler(apk_path, package_name, out_dex_file, uid);
     return *_aidl_return ? ok() : error("viewcompiler failed");
-}
-
-binder::Status InstalldNativeService::markBootComplete(const std::string& instructionSet) {
-    ENFORCE_UID(AID_SYSTEM);
-    std::lock_guard<std::recursive_mutex> lock(mLock);
-
-    const char* instruction_set = instructionSet.c_str();
-
-    char boot_marker_path[PKG_PATH_MAX];
-    sprintf(boot_marker_path,
-          "%s/%s/%s/.booting",
-          android_data_dir.c_str(),
-          DALVIK_CACHE,
-          instruction_set);
-
-    ALOGV("mark_boot_complete : %s", boot_marker_path);
-    if (unlink(boot_marker_path) != 0) {
-        return error(StringPrintf("Failed to unlink %s", boot_marker_path));
-    }
-    return ok();
 }
 
 binder::Status InstalldNativeService::linkNativeLibraryDirectory(

@@ -19,8 +19,6 @@
 //#define LOG_NDEBUG 0
 
 #include "InputManager.h"
-#include "InputDispatcherFactory.h"
-#include "InputDispatcherThread.h"
 #include "InputReaderFactory.h"
 
 #include <binder/IPCThreadState.h>
@@ -35,7 +33,7 @@ namespace android {
 InputManager::InputManager(
         const sp<InputReaderPolicyInterface>& readerPolicy,
         const sp<InputDispatcherPolicyInterface>& dispatcherPolicy) {
-    mDispatcher = createInputDispatcher(dispatcherPolicy);
+    mDispatcher = new InputDispatcher(dispatcherPolicy);
     mClassifier = new InputClassifier(mDispatcher);
     mReader = createInputReader(readerPolicy, mClassifier);
     initialize();
@@ -119,10 +117,6 @@ void InputManager::setInputWindows(const std::vector<InputWindowInfo>& infos,
     }
 }
 
-void InputManager::transferTouchFocus(const sp<IBinder>& fromToken, const sp<IBinder>& toToken) {
-    mDispatcher->transferTouchFocus(fromToken, toToken);
-}
-
 // Used by tests only.
 void InputManager::registerInputChannel(const sp<InputChannel>& channel) {
     IPCThreadState* ipc = IPCThreadState::self();
@@ -137,6 +131,10 @@ void InputManager::registerInputChannel(const sp<InputChannel>& channel) {
 
 void InputManager::unregisterInputChannel(const sp<InputChannel>& channel) {
     mDispatcher->unregisterInputChannel(channel);
+}
+
+void InputManager::setMotionClassifierEnabled(bool enabled) {
+    mClassifier->setMotionClassifierEnabled(enabled);
 }
 
 } // namespace android

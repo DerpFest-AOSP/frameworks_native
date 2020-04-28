@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef FRAMEWORK_NATIVE_CMDS_LSHAL_UTILS_H_
+#define FRAMEWORK_NATIVE_CMDS_LSHAL_UTILS_H_
 
 #include <iomanip>
 #include <iostream>
@@ -87,3 +88,5 @@ void replaceAll(std::string *s, char from, char to);
 
 }  // namespace lshal
 }  // namespace android
+
+#endif  // FRAMEWORK_NATIVE_CMDS_LSHAL_UTILS_H_

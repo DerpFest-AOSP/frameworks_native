@@ -40,6 +40,7 @@ static inline void clearError() {
 
 EGLDisplay eglGetDisplay(EGLNativeDisplayType display) {
     ATRACE_CALL();
+    clearError();
 
     if (egl_init_drivers() == EGL_FALSE) {
         return setError(EGL_BAD_PARAMETER, EGL_NO_DISPLAY);
@@ -47,7 +48,6 @@ EGLDisplay eglGetDisplay(EGLNativeDisplayType display) {
 
     // Call down the chain, which usually points directly to the impl
     // but may also be routed through layers
-    clearError();
     egl_connection_t* const cnx = &gEGLImpl;
     return cnx->platform.eglGetDisplay(display);
 }
@@ -55,6 +55,7 @@ EGLDisplay eglGetDisplay(EGLNativeDisplayType display) {
 EGLDisplay eglGetPlatformDisplay(EGLenum platform, EGLNativeDisplayType display,
                                  const EGLAttrib* attrib_list) {
     ATRACE_CALL();
+    clearError();
 
     if (egl_init_drivers() == EGL_FALSE) {
         return setError(EGL_BAD_PARAMETER, EGL_NO_DISPLAY);
@@ -62,7 +63,6 @@ EGLDisplay eglGetPlatformDisplay(EGLenum platform, EGLNativeDisplayType display,
 
     // Call down the chain, which usually points directly to the impl
     // but may also be routed through layers
-    clearError();
     egl_connection_t* const cnx = &gEGLImpl;
     return cnx->platform.eglGetPlatformDisplay(platform, display, attrib_list);
 }
@@ -239,12 +239,13 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char* procname)
     // in which case we must make sure we've initialized ourselves, this
     // happens the first time egl_get_display() is called.
 
+    clearError();
+
     if (egl_init_drivers() == EGL_FALSE) {
         setError(EGL_BAD_PARAMETER, NULL);
         return nullptr;
     }
 
-    clearError();
     egl_connection_t* const cnx = &gEGLImpl;
     return cnx->platform.eglGetProcAddress(procname);
 }
@@ -323,21 +324,23 @@ EGLBoolean eglWaitClient(void) {
 }
 
 EGLBoolean eglBindAPI(EGLenum api) {
+    clearError();
+
     if (egl_init_drivers() == EGL_FALSE) {
         return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
     }
 
-    clearError();
     egl_connection_t* const cnx = &gEGLImpl;
     return cnx->platform.eglBindAPI(api);
 }
 
 EGLenum eglQueryAPI(void) {
+    clearError();
+
     if (egl_init_drivers() == EGL_FALSE) {
         return setError(EGL_BAD_PARAMETER, (EGLBoolean)EGL_FALSE);
     }
 
-    clearError();
     egl_connection_t* const cnx = &gEGLImpl;
     return cnx->platform.eglQueryAPI();
 }
@@ -592,21 +595,23 @@ EGLClientBuffer eglGetNativeClientBufferANDROID(const AHardwareBuffer* buffer) {
 }
 
 EGLuint64NV eglGetSystemTimeFrequencyNV() {
+    clearError();
+
     if (egl_init_drivers() == EGL_FALSE) {
         return setError(EGL_BAD_PARAMETER, (EGLuint64NV)EGL_FALSE);
     }
 
-    clearError();
     egl_connection_t* const cnx = &gEGLImpl;
     return cnx->platform.eglGetSystemTimeFrequencyNV();
 }
 
 EGLuint64NV eglGetSystemTimeNV() {
+    clearError();
+
     if (egl_init_drivers() == EGL_FALSE) {
         return setError(EGL_BAD_PARAMETER, (EGLuint64NV)EGL_FALSE);
     }
 
-    clearError();
     egl_connection_t* const cnx = &gEGLImpl;
     return cnx->platform.eglGetSystemTimeNV();
 }

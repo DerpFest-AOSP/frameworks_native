@@ -149,10 +149,6 @@ void* IMemory::fastPointer(const sp<IBinder>& binder, ssize_t offset) const
     return static_cast<char*>(base) + offset;
 }
 
-void* IMemory::unsecurePointer() const {
-    return pointer();
-}
-
 void* IMemory::pointer() const {
     ssize_t offset;
     sp<IMemoryHeap> heap = getMemory(&offset);
@@ -514,4 +510,4 @@ void HeapCache::dump_heaps()
 
 
 // ---------------------------------------------------------------------------
-} // namespace android
+}; // namespace android

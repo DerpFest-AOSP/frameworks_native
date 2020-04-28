@@ -14,16 +14,8 @@
  * limitations under the License.
  */
 
-#include <CursorInputMapper.h>
-#include <InputDevice.h>
-#include <InputMapper.h>
-#include <InputReader.h>
-#include <KeyboardInputMapper.h>
-#include <MultiTouchInputMapper.h>
-#include <SingleTouchInputMapper.h>
-#include <SwitchInputMapper.h>
-#include <TestInputListener.h>
-#include <TouchInputMapper.h>
+#include "../InputReader.h"
+#include "TestInputListener.h"
 
 #include <gtest/gtest.h>
 #include <inttypes.h>

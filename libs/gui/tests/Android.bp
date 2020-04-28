@@ -47,6 +47,7 @@ cc_test {
         "libcutils",
         "libgui",
         "libhidlbase",
+        "libhidltransport",
         "libinput",
         "libui",
         "libutils",

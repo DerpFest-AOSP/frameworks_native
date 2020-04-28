@@ -138,7 +138,6 @@ cc_binary {
 
 cc_binary {
     name: "otapreopt_chroot",
-    defaults: ["libapexd-deps"],
     cflags: [
         "-Wall",
         "-Werror",
@@ -151,11 +150,20 @@ cc_binary {
     ],
     shared_libs: [
         "libbase",
+        "libbinder",
         "liblog",
+        "libprotobuf-cpp-full",
+        "libselinux",
         "libutils",
+        "libziparchive",
     ],
     static_libs: [
+        "libapex",
         "libapexd",
+        "lib_apex_manifest_proto",
+        "libavb",
+        "libdm",
+        "libvold_binder",
     ],
 }
 
@@ -164,7 +172,6 @@ filegroup {
     srcs: [
         "binder/android/os/IInstalld.aidl",
     ],
-    path: "binder",
 }
 
 //

@@ -1468,11 +1468,10 @@ int main(int argc, char **argv)
 
     // Reset the trace buffer size to 1.
     if (traceStop) {
+        cleanUpVendorTracing();
         cleanUpUserspaceTracing();
-        if (!onlyUserspace) {
-            cleanUpVendorTracing();
+        if (!onlyUserspace)
             cleanUpKernelTracing();
-        }
     }
 
     return g_traceAborted ? 1 : 0;

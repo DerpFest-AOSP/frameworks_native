@@ -153,6 +153,7 @@ void Layer::removeRemoteSyncPoints() {
     mRemoteSyncPoints.clear();
 
     {
+        Mutex::Autolock pendingStateLock(mPendingStateMutex);
         for (State pendingState : mPendingStates) {
             pendingState.barrierLayer_legacy = nullptr;
         }
@@ -906,7 +907,6 @@ uint32_t Layer::doTransaction(uint32_t flags) {
 
     // Commit the transaction
     commitTransaction(c);
-    mPendingStatesSnapshot = mPendingStates;
     mCurrentState.callbackHandles = {};
     return flags;
 }
@@ -1874,61 +1874,14 @@ void Layer::setInputInfo(const InputWindowInfo& info) {
     setTransactionFlags(eTransactionNeeded);
 }
 
-void Layer::writeToProtoDrawingState(LayerProto* layerInfo, uint32_t traceFlags) const {
-    ui::Transform transform = getTransform();
-
-    if (traceFlags & SurfaceTracing::TRACE_CRITICAL) {
-        for (const auto& pendingState : mPendingStatesSnapshot) {
-            auto barrierLayer = pendingState.barrierLayer_legacy.promote();
-            if (barrierLayer != nullptr) {
-                BarrierLayerProto* barrierLayerProto = layerInfo->add_barrier_layer();
-                barrierLayerProto->set_id(barrierLayer->sequence);
-                barrierLayerProto->set_frame_number(pendingState.frameNumber_legacy);
-            }
-        }
-
-        auto buffer = mActiveBuffer;
-        if (buffer != nullptr) {
-            LayerProtoHelper::writeToProto(buffer,
-                                           [&]() { return layerInfo->mutable_active_buffer(); });
-            LayerProtoHelper::writeToProto(ui::Transform(mCurrentTransform),
-                                           layerInfo->mutable_buffer_transform());
-        }
-        layerInfo->set_invalidate(contentDirty);
-        layerInfo->set_is_protected(isProtected());
-        layerInfo->set_dataspace(
-                dataspaceDetails(static_cast<android_dataspace>(mCurrentDataSpace)));
-        layerInfo->set_queued_frames(getQueuedFrameCount());
-        layerInfo->set_refresh_pending(isBufferLatched());
-        layerInfo->set_curr_frame(mCurrentFrameNumber);
-        layerInfo->set_effective_scaling_mode(getEffectiveScalingMode());
-
-        layerInfo->set_corner_radius(getRoundedCornerState().radius);
-        LayerProtoHelper::writeToProto(transform, layerInfo->mutable_transform());
-        LayerProtoHelper::writePositionToProto(transform.tx(), transform.ty(),
-                                               [&]() { return layerInfo->mutable_position(); });
-        LayerProtoHelper::writeToProto(mBounds, [&]() { return layerInfo->mutable_bounds(); });
-        LayerProtoHelper::writeToProto(visibleRegion,
-                                       [&]() { return layerInfo->mutable_visible_region(); });
-        LayerProtoHelper::writeToProto(surfaceDamageRegion,
-                                       [&]() { return layerInfo->mutable_damage_region(); });
-    }
-
-    if (traceFlags & SurfaceTracing::TRACE_EXTRA) {
-        LayerProtoHelper::writeToProto(mSourceBounds,
-                                       [&]() { return layerInfo->mutable_source_bounds(); });
-        LayerProtoHelper::writeToProto(mScreenBounds,
-                                       [&]() { return layerInfo->mutable_screen_bounds(); });
-    }
-}
-
-void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet stateSet,
-                                    uint32_t traceFlags) const {
+void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet,
+                         uint32_t traceFlags) {
     const bool useDrawing = stateSet == LayerVector::StateSet::Drawing;
     const LayerVector& children = useDrawing ? mDrawingChildren : mCurrentChildren;
     const State& state = useDrawing ? mDrawingState : mCurrentState;
 
     ui::Transform requestedTransform = state.active_legacy.transform;
+    ui::Transform transform = getTransform();
 
     if (traceFlags & SurfaceTracing::TRACE_CRITICAL) {
         layerInfo->set_id(sequence);
@@ -1948,9 +1901,16 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
 
         LayerProtoHelper::writeToProto(state.activeTransparentRegion_legacy,
                                        [&]() { return layerInfo->mutable_transparent_region(); });
+        LayerProtoHelper::writeToProto(visibleRegion,
+                                       [&]() { return layerInfo->mutable_visible_region(); });
+        LayerProtoHelper::writeToProto(surfaceDamageRegion,
+                                       [&]() { return layerInfo->mutable_damage_region(); });
 
         layerInfo->set_layer_stack(getLayerStack());
         layerInfo->set_z(state.z);
+
+        LayerProtoHelper::writePositionToProto(transform.tx(), transform.ty(),
+                                               [&]() { return layerInfo->mutable_position(); });
 
         LayerProtoHelper::writePositionToProto(requestedTransform.tx(), requestedTransform.ty(),
                                                [&]() {
@@ -1962,9 +1922,15 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
 
         LayerProtoHelper::writeToProto(state.crop_legacy,
                                        [&]() { return layerInfo->mutable_crop(); });
+        layerInfo->set_corner_radius(getRoundedCornerState().radius);
 
         layerInfo->set_is_opaque(isOpaque(state));
+        layerInfo->set_invalidate(contentDirty);
+        layerInfo->set_is_protected(isProtected());
 
+        // XXX (b/79210409) mCurrentDataSpace is not protected
+        layerInfo->set_dataspace(
+                dataspaceDetails(static_cast<android_dataspace>(mCurrentDataSpace)));
 
         layerInfo->set_pixel_format(decodePixelFormat(getPixelFormat()));
         LayerProtoHelper::writeToProto(getColor(), [&]() { return layerInfo->mutable_color(); });
@@ -1972,6 +1938,7 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
                                        [&]() { return layerInfo->mutable_requested_color(); });
         layerInfo->set_flags(state.flags);
 
+        LayerProtoHelper::writeToProto(transform, layerInfo->mutable_transform());
         LayerProtoHelper::writeToProto(requestedTransform,
                                        layerInfo->mutable_requested_transform());
 
@@ -1988,6 +1955,29 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
         } else {
             layerInfo->set_z_order_relative_of(-1);
         }
+
+        auto buffer = mActiveBuffer;
+        if (buffer != nullptr) {
+            LayerProtoHelper::writeToProto(buffer,
+                                           [&]() { return layerInfo->mutable_active_buffer(); });
+            LayerProtoHelper::writeToProto(ui::Transform(mCurrentTransform),
+                                           layerInfo->mutable_buffer_transform());
+        }
+
+        layerInfo->set_queued_frames(getQueuedFrameCount());
+        layerInfo->set_refresh_pending(isBufferLatched());
+        layerInfo->set_curr_frame(mCurrentFrameNumber);
+        layerInfo->set_effective_scaling_mode(getEffectiveScalingMode());
+
+        for (const auto& pendingState : mPendingStates) {
+            auto barrierLayer = pendingState.barrierLayer_legacy.promote();
+            if (barrierLayer != nullptr) {
+                BarrierLayerProto* barrierLayerProto = layerInfo->add_barrier_layer();
+                barrierLayerProto->set_id(barrierLayer->sequence);
+                barrierLayerProto->set_frame_number(pendingState.frameNumber_legacy);
+            }
+        }
+        LayerProtoHelper::writeToProto(mBounds, [&]() { return layerInfo->mutable_bounds(); });
     }
 
     if (traceFlags & SurfaceTracing::TRACE_INPUT) {
@@ -2000,19 +1990,23 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
         for (const auto& entry : state.metadata.mMap) {
             (*protoMap)[entry.first] = std::string(entry.second.cbegin(), entry.second.cend());
         }
+        LayerProtoHelper::writeToProto(mEffectiveTransform,
+                                       layerInfo->mutable_effective_transform());
+        LayerProtoHelper::writeToProto(mSourceBounds,
+                                       [&]() { return layerInfo->mutable_source_bounds(); });
+        LayerProtoHelper::writeToProto(mScreenBounds,
+                                       [&]() { return layerInfo->mutable_screen_bounds(); });
     }
 }
 
-void Layer::writeToProtoCompositionState(LayerProto* layerInfo,
-                                         const sp<DisplayDevice>& displayDevice,
-                                         uint32_t traceFlags) const {
+void Layer::writeToProto(LayerProto* layerInfo, const sp<DisplayDevice>& displayDevice,
+                         uint32_t traceFlags) {
     auto outputLayer = findOutputLayerForDisplay(displayDevice);
     if (!outputLayer) {
         return;
     }
 
-    writeToProtoDrawingState(layerInfo, traceFlags);
-    writeToProtoCommonState(layerInfo, LayerVector::StateSet::Drawing, traceFlags);
+    writeToProto(layerInfo, LayerVector::StateSet::Drawing, traceFlags);
 
     const auto& compositionState = outputLayer->getState();
 
@@ -2030,11 +2024,25 @@ void Layer::writeToProtoCompositionState(LayerProto* layerInfo,
             static_cast<int32_t>(compositionState.hwc ? (*compositionState.hwc).hwcCompositionType
                                                       : Hwc2::IComposerClient::Composition::CLIENT);
     layerInfo->set_hwc_composition_type(compositionType);
+
+    if (std::strcmp(getTypeId(), "BufferLayer") == 0 &&
+        static_cast<BufferLayer*>(this)->isProtected()) {
+        layerInfo->set_is_protected(true);
+    } else {
+        layerInfo->set_is_protected(false);
+    }
 }
 
 bool Layer::isRemovedFromCurrentState() const  {
     return mRemovedFromCurrentState;
 }
+
+// Debug helper for b/137560795
+#define INT32_MIGHT_OVERFLOW(n) (((n) >= INT32_MAX / 2) || ((n) <= INT32_MIN / 2))
+
+#define RECT_BOUNDS_INVALID(rect)                                               \
+    (INT32_MIGHT_OVERFLOW((rect).left) || INT32_MIGHT_OVERFLOW((rect).right) || \
+     INT32_MIGHT_OVERFLOW((rect).bottom) || INT32_MIGHT_OVERFLOW((rect).top))
 
 InputWindowInfo Layer::fillInputInfo() {
     InputWindowInfo info = mDrawingState.inputInfo;
@@ -2046,14 +2054,14 @@ InputWindowInfo Layer::fillInputInfo() {
     ui::Transform t = getTransform();
     const float xScale = t.sx();
     const float yScale = t.sy();
-    int32_t xSurfaceInset = info.surfaceInset;
-    int32_t ySurfaceInset = info.surfaceInset;
+    float xSurfaceInset = info.surfaceInset;
+    float ySurfaceInset = info.surfaceInset;
     if (xScale != 1.0f || yScale != 1.0f) {
-        info.windowXScale *= (xScale != 0.0f) ? 1.0f / xScale : 0.0f;
-        info.windowYScale *= (yScale != 0.0f) ? 1.0f / yScale : 0.0f;
+        info.windowXScale *= 1.0f / xScale;
+        info.windowYScale *= 1.0f / yScale;
         info.touchableRegion.scaleSelf(xScale, yScale);
-        xSurfaceInset = std::round(xSurfaceInset * xScale);
-        ySurfaceInset = std::round(ySurfaceInset * yScale);
+        xSurfaceInset *= xScale;
+        ySurfaceInset *= yScale;
     }
 
     // Transform layer size to screen space and inset it by surface insets.
@@ -2066,10 +2074,25 @@ InputWindowInfo Layer::fillInputInfo() {
     }
     layerBounds = t.transform(layerBounds);
 
-    // clamp inset to layer bounds
-    xSurfaceInset = (xSurfaceInset >= 0) ? std::min(xSurfaceInset, layerBounds.getWidth() / 2) : 0;
-    ySurfaceInset = (ySurfaceInset >= 0) ? std::min(ySurfaceInset, layerBounds.getHeight() / 2) : 0;
+    // debug check for b/137560795
+    {
+        if (RECT_BOUNDS_INVALID(layerBounds)) {
+            ALOGE("layer %s bounds are invalid (%" PRIi32 ", %" PRIi32 ", %" PRIi32 ", %" PRIi32
+                  ")",
+                  mName.c_str(), layerBounds.left, layerBounds.top, layerBounds.right,
+                  layerBounds.bottom);
+            std::string out;
+            getTransform().dump(out, "Transform");
+            ALOGE("%s", out.c_str());
+            layerBounds.left = layerBounds.top = layerBounds.right = layerBounds.bottom = 0;
+        }
 
+        if (INT32_MIGHT_OVERFLOW(xSurfaceInset) || INT32_MIGHT_OVERFLOW(ySurfaceInset)) {
+            ALOGE("layer %s surface inset are invalid (%" PRIi32 ", %" PRIi32 ")", mName.c_str(),
+                  int32_t(xSurfaceInset), int32_t(ySurfaceInset));
+            xSurfaceInset = ySurfaceInset = 0;
+        }
+    }
     layerBounds.inset(xSurfaceInset, ySurfaceInset, xSurfaceInset, ySurfaceInset);
 
     // Input coordinate should match the layer bounds.

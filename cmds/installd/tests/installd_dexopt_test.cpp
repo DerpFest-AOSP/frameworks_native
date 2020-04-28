@@ -41,7 +41,6 @@
 #include "globals.h"
 #include "tests/test_utils.h"
 #include "utils.h"
-#include "ziparchive/zip_writer.h"
 
 using android::base::ReadFully;
 using android::base::unique_fd;
@@ -196,7 +195,6 @@ protected:
     std::unique_ptr<std::string> volume_uuid_;
     std::string package_name_;
     std::string apk_path_;
-    std::string empty_dm_file_;
     std::string app_apk_dir_;
     std::string app_private_dir_ce_;
     std::string app_private_dir_de_;
@@ -241,14 +239,18 @@ protected:
     }
 
     ::testing::AssertionResult create_mock_app() {
+        // Create the oat dir.
+        app_oat_dir_ = app_apk_dir_ + "/oat";
         // For debug mode, the directory might already exist. Avoid erroring out.
         if (mkdir(app_apk_dir_, kSystemUid, kSystemGid, 0755) != 0 && !kDebug) {
             return ::testing::AssertionFailure() << "Could not create app dir " << app_apk_dir_
                                                  << " : " << strerror(errno);
         }
-
-        // Initialize the oat dir path.
-        app_oat_dir_ = app_apk_dir_ + "/oat";
+        binder::Status status = service_->createOatDir(app_oat_dir_, kRuntimeIsa);
+        if (!status.isOk()) {
+            return ::testing::AssertionFailure() << "Could not create oat dir: "
+                                                 << status.toString8().c_str();
+        }
 
         // Copy the primary apk.
         apk_path_ = app_apk_dir_ + "/base.jar";
@@ -258,28 +260,8 @@ protected:
                                                  << " : " << error_msg;
         }
 
-        // Create an empty dm file.
-        empty_dm_file_ = apk_path_ + ".dm";
-        {
-            int fd = open(empty_dm_file_.c_str(), O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
-            if (fd < 0) {
-                return ::testing::AssertionFailure() << "Could not open " << empty_dm_file_;
-            }
-            FILE* file = fdopen(fd, "wb");
-            if (file == nullptr) {
-                return ::testing::AssertionFailure() << "Null file for " << empty_dm_file_
-                         << " fd=" << fd;
-            }
-            ZipWriter writer(file);
-            // Add vdex to zip.
-            writer.StartEntry("primary.prof", ZipWriter::kCompress);
-            writer.FinishEntry();
-            writer.Finish();
-            fclose(file);
-          }
-
         // Create the app user data.
-        binder::Status status = service_->createAppData(
+        status = service_->createAppData(
                 volume_uuid_,
                 package_name_,
                 kTestUserId,
@@ -497,7 +479,7 @@ protected:
         bool prof_result;
         ASSERT_BINDER_SUCCESS(service_->prepareAppProfile(
                 package_name_, kTestUserId, kTestAppId, *profile_name_ptr, apk_path_,
-                dm_path_ptr, &prof_result));
+                /*dex_metadata*/ nullptr, &prof_result));
         ASSERT_TRUE(prof_result);
 
         binder::Status result = service_->dexopt(apk_path_,
@@ -643,16 +625,6 @@ TEST_F(DexoptTest, DexoptPrimaryPublic) {
                         DEX2OAT_FROM_SCRATCH);
 }
 
-TEST_F(DexoptTest, DexoptPrimaryPublicCreateOatDir) {
-    LOG(INFO) << "DexoptPrimaryPublic";
-    ASSERT_BINDER_SUCCESS(service_->createOatDir(app_oat_dir_, kRuntimeIsa));
-    CompilePrimaryDexOk("verify",
-                        DEXOPT_BOOTCOMPLETE | DEXOPT_PUBLIC,
-                        app_oat_dir_.c_str(),
-                        kTestAppGid,
-                        DEX2OAT_FROM_SCRATCH);
-}
-
 TEST_F(DexoptTest, DexoptPrimaryFailedInvalidFilter) {
     LOG(INFO) << "DexoptPrimaryFailedInvalidFilter";
     binder::Status status;
@@ -673,9 +645,7 @@ TEST_F(DexoptTest, DexoptPrimaryProfileNonPublic) {
                         DEXOPT_BOOTCOMPLETE | DEXOPT_PROFILE_GUIDED | DEXOPT_GENERATE_APP_IMAGE,
                         app_oat_dir_.c_str(),
                         kTestAppGid,
-                        DEX2OAT_FROM_SCRATCH,
-                        /*binder_result=*/nullptr,
-                        empty_dm_file_.c_str());
+                        DEX2OAT_FROM_SCRATCH);
 }
 
 TEST_F(DexoptTest, DexoptPrimaryProfilePublic) {
@@ -685,9 +655,7 @@ TEST_F(DexoptTest, DexoptPrimaryProfilePublic) {
                                 DEXOPT_GENERATE_APP_IMAGE,
                         app_oat_dir_.c_str(),
                         kTestAppGid,
-                        DEX2OAT_FROM_SCRATCH,
-                        /*binder_result=*/nullptr,
-                        empty_dm_file_.c_str());
+                        DEX2OAT_FROM_SCRATCH);
 }
 
 TEST_F(DexoptTest, DexoptPrimaryBackgroundOk) {
@@ -697,9 +665,7 @@ TEST_F(DexoptTest, DexoptPrimaryBackgroundOk) {
                                 DEXOPT_GENERATE_APP_IMAGE,
                         app_oat_dir_.c_str(),
                         kTestAppGid,
-                        DEX2OAT_FROM_SCRATCH,
-                        /*binder_result=*/nullptr,
-                        empty_dm_file_.c_str());
+                        DEX2OAT_FROM_SCRATCH);
 }
 
 TEST_F(DexoptTest, ResolveStartupConstStrings) {
@@ -718,9 +684,7 @@ TEST_F(DexoptTest, ResolveStartupConstStrings) {
                                 DEXOPT_GENERATE_APP_IMAGE,
                         app_oat_dir_.c_str(),
                         kTestAppGid,
-                        DEX2OAT_FROM_SCRATCH,
-                        /*binder_result=*/nullptr,
-                        empty_dm_file_.c_str());
+                        DEX2OAT_FROM_SCRATCH);
     run_cmd_and_process_output(
             "oatdump --header-only --oat-file=" + odex,
             [&](const std::string& line) {
@@ -737,9 +701,7 @@ TEST_F(DexoptTest, ResolveStartupConstStrings) {
                                 DEXOPT_GENERATE_APP_IMAGE,
                         app_oat_dir_.c_str(),
                         kTestAppGid,
-                        DEX2OAT_FROM_SCRATCH,
-                        /*binder_result=*/nullptr,
-                        empty_dm_file_.c_str());
+                        DEX2OAT_FROM_SCRATCH);
     run_cmd_and_process_output(
             "oatdump --header-only --oat-file=" + odex,
             [&](const std::string& line) {

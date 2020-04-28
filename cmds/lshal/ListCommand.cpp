@@ -163,11 +163,11 @@ template <typename ObjectType>
 VintfInfo getVintfInfo(const std::shared_ptr<const ObjectType>& object,
                        const FqInstance& fqInstance, vintf::TransportArch ta, VintfInfo value) {
     bool found = false;
-    (void)object->forEachHidlInstanceOfVersion(fqInstance.getPackage(), fqInstance.getVersion(),
-                                               [&](const auto& instance) {
-                                                   found = match(instance, fqInstance, ta);
-                                                   return !found; // continue if not found
-                                               });
+    (void)object->forEachInstanceOfVersion(fqInstance.getPackage(), fqInstance.getVersion(),
+                                           [&](const auto& instance) {
+                                               found = match(instance, fqInstance, ta);
+                                               return !found; // continue if not found
+                                           });
     return found ? value : VINTF_INFO_EMPTY;
 }
 
@@ -453,7 +453,7 @@ bool ListCommand::addEntryWithoutInstance(const TableEntry& entry,
     }
 
     bool found = false;
-    (void)manifest->forEachHidlInstanceOfVersion(package, version, [&found](const auto&) {
+    (void)manifest->forEachInstanceOfVersion(package, version, [&found](const auto&) {
         found = true;
         return false; // break
     });
@@ -797,9 +797,9 @@ Status ListCommand::fetchManifestHals() {
 
         std::map<std::string, TableEntry> entries;
 
-        manifest->forEachHidlInstance([&] (const vintf::ManifestInstance& manifestInstance) {
+        manifest->forEachInstance([&] (const vintf::ManifestInstance& manifestInstance) {
             TableEntry entry{
-                .interfaceName = manifestInstance.description(),
+                .interfaceName = manifestInstance.getFqInstance().string(),
                 .transport = manifestInstance.transport(),
                 .arch = manifestInstance.arch(),
                 // TODO(b/71555570): Device manifest does not distinguish HALs from vendor or ODM.
@@ -975,8 +975,7 @@ void ListCommand::registerAllOptions() {
        "    - DM: if the HAL is in the device manifest\n"
        "    - DC: if the HAL is in the device compatibility matrix\n"
        "    - FM: if the HAL is in the framework manifest\n"
-       "    - FC: if the HAL is in the framework compatibility matrix\n"
-       "    - X: if the HAL is in none of the above lists"});
+       "    - FC: if the HAL is in the framework compatibility matrix"});
     mOptions.push_back({'S', "service-status", no_argument, v++, [](ListCommand* thiz, const char*) {
         thiz->mSelectedColumns.push_back(TableColumnType::SERVICE_STATUS);
         return OK;
