@@ -165,7 +165,7 @@ void* LoadLibrary(const android_dlextinfo& dlextinfo,
 }
 
 const std::array<const char*, 2> HAL_SUBNAME_KEY_PROPERTIES = {{
-    "ro.hardware." HWVULKAN_HARDWARE_MODULE_ID,
+    "ro.hardware.vulkan",
     "ro.board.platform",
 }};
 
@@ -754,10 +754,6 @@ void FreeDeviceData(DeviceData* data, const VkAllocationCallbacks& allocator) {
 }
 
 }  // anonymous namespace
-
-bool Debuggable() {
-    return (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) >= 0);
-}
 
 bool OpenHAL() {
     return Hal::Open();
