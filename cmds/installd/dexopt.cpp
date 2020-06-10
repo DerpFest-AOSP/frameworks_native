@@ -318,6 +318,16 @@ static const char* kJitZygoteImage =
 // Phenotype property name for enabling profiling the boot class path.
 static const char* PROFILE_BOOT_CLASS_PATH = "profilebootclasspath";
 
+static bool IsBootClassPathProfilingEnable() {
+    std::string profile_boot_class_path = GetProperty("dalvik.vm.profilebootclasspath", "");
+    profile_boot_class_path =
+        server_configurable_flags::GetServerConfigurableFlag(
+            RUNTIME_NATIVE_BOOT_NAMESPACE,
+            PROFILE_BOOT_CLASS_PATH,
+            /*default_value=*/ profile_boot_class_path);
+    return profile_boot_class_path == "true";
+}
+
 class RunDex2Oat : public ExecVHelper {
   public:
     RunDex2Oat(int zip_fd,
@@ -429,8 +439,17 @@ class RunDex2Oat : public ExecVHelper {
             MapPropertyToArg("dalvik.vm.dex2oat-very-large", "--very-large-app-threshold=%s");
 
 
+
+        // Decide whether to use dex2oat64.
+        bool use_dex2oat64 = false;
+        // Check whether the device even supports 64-bit ABIs.
+        if (!GetProperty("ro.product.cpu.abilist64", "").empty()) {
+          use_dex2oat64 = GetBoolProperty("dalvik.vm.dex2oat64.enabled", false);
+        }
         const char* dex2oat_bin = select_execution_binary(
-            kDex2oatPath, kDex2oatDebugPath, background_job_compile);
+            (use_dex2oat64 ? kDex2oat64Path : kDex2oat32Path),
+            (use_dex2oat64 ? kDex2oatDebug64Path : kDex2oatDebug32Path),
+            background_job_compile);
 
         bool generate_minidebug_info = kEnableMinidebugInfo &&
                 GetBoolProperty(kMinidebugInfoSystemProperty, kMinidebugInfoSystemPropertyDefault);
@@ -441,14 +460,7 @@ class RunDex2Oat : public ExecVHelper {
                                                                  ENABLE_JITZYGOTE_IMAGE,
                                                                  /*default_value=*/ "");
 
-        std::string profile_boot_class_path = GetProperty("dalvik.vm.profilebootclasspath", "");
-        profile_boot_class_path =
-            server_configurable_flags::GetServerConfigurableFlag(
-                RUNTIME_NATIVE_BOOT_NAMESPACE,
-                PROFILE_BOOT_CLASS_PATH,
-                /*default_value=*/ profile_boot_class_path);
-
-        if (use_jitzygote_image == "true" || profile_boot_class_path == "true") {
+        if (use_jitzygote_image == "true" || IsBootClassPathProfilingEnable()) {
           boot_image = StringPrintf("--boot-image=%s", kJitZygoteImage);
         } else {
           boot_image = MapPropertyToArg("dalvik.vm.boot-image", "--boot-image=%s");
@@ -887,7 +899,15 @@ static bool analyze_profiles(uid_t uid, const std::string& package_name,
     }
 
     RunProfman profman_merge;
-    profman_merge.SetupMerge(profiles_fd, reference_profile_fd);
+    const std::vector<unique_fd>& apk_fds = std::vector<unique_fd>();
+    const std::vector<std::string>& dex_locations = std::vector<std::string>();
+    profman_merge.SetupMerge(
+            profiles_fd,
+            reference_profile_fd,
+            apk_fds,
+            dex_locations,
+            /* for_snapshot= */ false,
+            IsBootClassPathProfilingEnable());
     pid_t pid = fork();
     if (pid == 0) {
         /* child -- drop privileges before continuing */
@@ -2801,7 +2821,13 @@ static bool create_app_profile_snapshot(int32_t app_id,
     }
 
     RunProfman args;
-    args.SetupMerge(profiles_fd, snapshot_fd, apk_fds, dex_locations, /*for_snapshot=*/true);
+    // This is specifically a snapshot for an app, so don't use boot image profiles.
+    args.SetupMerge(profiles_fd,
+            snapshot_fd,
+            apk_fds,
+            dex_locations,
+            /* for_snapshot= */ true,
+            /* for_boot_image= */ false);
     pid_t pid = fork();
     if (pid == 0) {
         /* child -- drop privileges before continuing */
