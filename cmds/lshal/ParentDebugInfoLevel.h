@@ -13,19 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
-// This AIDL is to test things that can't be tested in CtsNdkBinderTestCases
-// because it requires libbinder_ndk implementation details or APIs not
-// available to apps. Please prefer adding tests to CtsNdkBinderTestCases
-// over here.
+namespace android {
+namespace lshal {
 
-import IEmpty;
+// Describe verbosity when dumping debug information on a HAL service by
+// referring to a parent HAL interface FQName (for example, when dumping debug information
+// on foo@1.0::IFoo but the HAL implementation is foo@1.1::IFoo).
+enum class ParentDebugInfoLevel {
+    // Write nothing.
+    NOTHING,
+    // Write a short description that includes the FQName of the real implementation.
+    FQNAME_ONLY,
+    // Write full debug info.
+    FULL,
+};
 
-interface IBinderNdkUnitTest {
-    int repeatInt(int a);
-
-    void takeInterface(IEmpty test);
-    void forceFlushCommands();
-
-    boolean getsRequestedSid();
-}
+} // namespace lshal
+} // namespace android
