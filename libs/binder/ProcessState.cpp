@@ -160,8 +160,8 @@ bool ProcessState::becomeContextManager(context_check_func checkFunc, void* user
     if (result != 0) {
         android_errorWriteLog(0x534e4554, "121035042");
 
-        int dummy = 0;
-        result = ioctl(mDriverFD, BINDER_SET_CONTEXT_MGR, &dummy);
+        int unused = 0;
+        result = ioctl(mDriverFD, BINDER_SET_CONTEXT_MGR, &unused);
     }
 
     if (result == -1) {
@@ -404,7 +404,7 @@ ProcessState::ProcessState(const char *driver)
     , mCallRestriction(CallRestriction::NONE)
 {
 
-// TODO(b/139016109): enforce in build system
+// TODO(b/166468760): enforce in build system
 #if defined(__ANDROID_APEX__)
     LOG_ALWAYS_FATAL("Cannot use libbinder in APEX (only system.img libbinder) since it is not stable.");
 #endif
