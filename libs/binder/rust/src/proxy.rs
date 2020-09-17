@@ -28,6 +28,7 @@ use crate::sys;
 
 use std::convert::TryInto;
 use std::ffi::{c_void, CString};
+use std::fmt;
 use std::os::unix::io::AsRawFd;
 use std::ptr;
 
@@ -36,6 +37,12 @@ use std::ptr;
 /// This struct encapsulates the generic C++ `sp<IBinder>` class. This wrapper
 /// is untyped; typed interface access is implemented by the AIDL compiler.
 pub struct SpIBinder(*mut sys::AIBinder);
+
+impl fmt::Debug for SpIBinder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad("SpIBinder")
+    }
+}
 
 /// # Safety
 ///
@@ -240,6 +247,12 @@ impl<T: AsNative<sys::AIBinder>> IBinder for T {
             sys::AIBinder_ping(self.as_native_mut())
         };
         status_result(status)
+    }
+
+    fn set_requesting_sid(&mut self, enable: bool) {
+        unsafe {
+            sys::AIBinder_setRequestingSid(self.as_native_mut(), enable)
+        };
     }
 
     fn dump<F: AsRawFd>(&mut self, fp: &F, args: &[&str]) -> Result<()> {
