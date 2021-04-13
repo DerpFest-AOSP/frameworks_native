@@ -1169,6 +1169,7 @@ void GLESRenderEngine::drawLayersInternal(
     const mat4 projectionMatrix =
             ui::Transform(display.orientation).asMatrix4() * mState.projectionMatrix;
 
+    int blurredLayers = 0;
     Mesh mesh = Mesh::Builder()
                         .setPrimitive(Mesh::TRIANGLE_FAN)
                         .setVertices(4 /* count */, 2 /* size */)
@@ -1211,7 +1212,7 @@ void GLESRenderEngine::drawLayersInternal(
                 return;
             }
 
-            status = mBlurFilter->render(blurLayersSize > 1);
+            status = mBlurFilter->render(blurLayersSize, blurredLayers);
             if (status != NO_ERROR) {
                 ALOGE("Failed to render blur effect! Aborting GPU composition for buffer (%p).",
                       buffer->getBuffer()->handle);
@@ -1219,6 +1220,8 @@ void GLESRenderEngine::drawLayersInternal(
                 resultPromise->set_value({status, base::unique_fd()});
                 return;
             }
+
+            blurredLayers += 1;
         }
 
         // Ensure luminance is at least 100 nits to avoid div-by-zero
