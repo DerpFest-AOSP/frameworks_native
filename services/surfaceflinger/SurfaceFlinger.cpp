@@ -433,6 +433,10 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
     mBackpressureGpuComposition = base::GetBoolProperty("debug.sf.enable_gl_backpressure"s, true);
     ALOGI_IF(mBackpressureGpuComposition, "Enabling backpressure for GPU composition");
 
+    property_get("debug.sf.disable_backpressure", value, "0");
+    mPropagateBackpressure = !atoi(value);
+    ALOGI_IF(!mPropagateBackpressure, "Disabling backpressure propagation");
+
     property_get("ro.surface_flinger.supports_background_blur", value, "0");
     bool supportsBlurs = atoi(value);
     mSupportsBlur = supportsBlurs;
@@ -2404,7 +2408,7 @@ bool SurfaceFlinger::commit(TimePoint frameTime, VsyncId vsyncId, TimePoint expe
     // When backpressure propagation is enabled, we want to give a small grace period of 1ms
     // for the present fence to fire instead of just giving up on this frame to handle cases
     // where present fence is just about to get signaled.
-    const int graceTimeForPresentFenceMs = static_cast<int>(
+    const int graceTimeForPresentFenceMs = mPropagateBackpressure && static_cast<int>(
             mBackpressureGpuComposition || !mCompositionCoverage.test(CompositionCoverage::Gpu));
 
     // Pending frames may trigger backpressure propagation.
@@ -2472,7 +2476,7 @@ bool SurfaceFlinger::commit(TimePoint frameTime, VsyncId vsyncId, TimePoint expe
         }
     }
 
-    if (framePending) {
+    if (framePending && mPropagateBackpressure) {
         if (mBackpressureGpuComposition || (hwcFrameMissed && !gpuFrameMissed)) {
             scheduleCommit(FrameHint::kNone);
             return false;
