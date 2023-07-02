@@ -202,6 +202,10 @@ public:
     // See IGraphicBufferProducer::setAutoPrerotation
     virtual status_t setAutoPrerotation(bool autoPrerotation);
 
+    // MIUI ADD:
+    // See IGraphicBufferProducer::adjustMaxDequeuedBufferCount
+    virtual status_t adjustMaxDequeuedBufferCount(int count);
+
 private:
     // This is required by the IBinder::DeathRecipient interface
     virtual void binderDied(const wp<IBinder>& who);
