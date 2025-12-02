@@ -586,7 +586,13 @@ status_t RpcState::waitForReply(const sp<RpcSession::RpcConnection>& connection,
     }
 
     CommandData data(command.bodySize);
-    if (!data.valid()) return NO_MEMORY;
+    if (!data.valid()) {
+        // b/404210068 - if we run out of memory, the wire protocol gets messed up.
+        // so shutdown. We would need to read all the transaction data anyway and
+        // send a reply still to gracefully recover.
+        (void)session->shutdownAndWait(false);
+        return NO_MEMORY;
+    }
 
     iovec iov{data.data(), command.bodySize};
     if (status_t status = rpcRec(connection, session, "reply body", &iov, 1); status != OK)
@@ -695,7 +701,12 @@ status_t RpcState::processCommand(const sp<RpcSession::RpcConnection>& connectio
 
     switch (command.command) {
         case RPC_COMMAND_TRANSACT:
-            if (type != CommandType::ANY) return BAD_TYPE;
+            if (type != CommandType::ANY) {
+                ALOGE("CommandType %d, but got RPC command %d.", static_cast<int>(type),
+                      command.command);
+                (void)session->shutdownAndWait(false);
+                return BAD_TYPE;
+            }
             return processTransact(connection, session, command);
         case RPC_COMMAND_DEC_STRONG:
             return processDecStrong(connection, session, command);
@@ -716,6 +727,10 @@ status_t RpcState::processTransact(const sp<RpcSession::RpcConnection>& connecti
 
     CommandData transactionData(command.bodySize);
     if (!transactionData.valid()) {
+        // b/404210068 - if we run out of memory, the wire protocol gets messed up.
+        // so shutdown. We would need to read all the transaction data anyway and
+        // send a reply still to gracefully recover.
+        (void)session->shutdownAndWait(false);
         return NO_MEMORY;
     }
     iovec iov{transactionData.data(), transactionData.size()};
